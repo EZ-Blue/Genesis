@@ -6,7 +6,7 @@
 <!--This model parameters (e.g. contact detection etc.) haven't been optimized.-->
 <mujoco model="GZ_DW_sub01">
 
-  <include file="Genesis/genesis/assets/xml/humanoid/common/mimic_sites.xml"/>
+  <include file="/home/tom-wang/Documents/Genesis/genesis/assets/xml/humanoid/common/mimic_sites.xml"/>
 
   <compiler inertiafromgeom="auto" angle="radian" balanceinertia="true" boundmass="0.001" boundinertia="0.001">
     <lengthrange inttotal="50" useexisting="true"></lengthrange>

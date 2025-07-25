@@ -21,6 +21,9 @@ class HumanoidEnv:
         self.dt = 0.02  # control frequency 
         self.max_episode_length = math.ceil(env_cfg["episode_length_s"] / self.dt)
 
+        # Fixed target speed for forward walking
+        self.target_speed = 1.5  # meters per second
+
         self.env_cfg = env_cfg
         self.obs_cfg = obs_cfg
         self.reward_cfg = reward_cfg
@@ -56,10 +59,10 @@ class HumanoidEnv:
         self.base_init_quat = torch.tensor(self.env_cfg["base_init_quat"], device=gs.device)
         self.inv_base_init_quat = inv_quat(self.base_init_quat)
         self.robot = self.scene.add_entity(
-            gs.morphs.URDF(
-                file="urdf/go2/urdf/go2.urdf",
-                pos=self.base_init_pos.cpu().numpy(),
-                quat=self.base_init_quat.cpu().numpy(),
+            gs.morphs.MJCF(
+                file="/home/tom-wang/Documents/Genesis/genesis/assets/xml/humanoid/skeleton_torque.xml",
+                # pos=self.base_init_pos.cpu().numpy(),
+                # quat=self.base_init_quat.cpu().numpy(),
             ),
         )
 
@@ -112,10 +115,20 @@ class HumanoidEnv:
         self.extras = dict()  # extra information for logging
         self.extras["observations"] = dict()
 
+        # Set fixed commands for 1.5 m/s forward speed
+        self._set_fixed_commands()
+
+    def _set_fixed_commands(self):
+        """Set fixed commands for walking forward at target speed"""
+        self.commands[:, 0] = self.target_speed  # forward velocity (x-axis)
+        self.commands[:, 1] = 0.0  # no lateral velocity (y-axis)
+        self.commands[:, 2] = 0.0  # no angular velocity (yaw)
+
     def _resample_commands(self, envs_idx):
-        self.commands[envs_idx, 0] = gs_rand_float(*self.command_cfg["lin_vel_x_range"], (len(envs_idx),), gs.device)
-        self.commands[envs_idx, 1] = gs_rand_float(*self.command_cfg["lin_vel_y_range"], (len(envs_idx),), gs.device)
-        self.commands[envs_idx, 2] = gs_rand_float(*self.command_cfg["ang_vel_range"], (len(envs_idx),), gs.device)
+        # For fixed speed training, commands don't change
+        self.commands[envs_idx, 0] = self.target_speed
+        self.commands[envs_idx, 1] = 0.0
+        self.commands[envs_idx, 2] = 0.0
 
     def step(self, actions):
         self.actions = torch.clip(actions, -self.env_cfg["clip_actions"], self.env_cfg["clip_actions"])
@@ -140,7 +153,7 @@ class HumanoidEnv:
         self.dof_pos[:] = self.robot.get_dofs_position(self.motors_dof_idx)
         self.dof_vel[:] = self.robot.get_dofs_velocity(self.motors_dof_idx)
 
-        # resample commands
+        # Commands don't need resampling for fixed speed, but keep for consistency
         envs_idx = (
             (self.episode_length_buf % int(self.env_cfg["resampling_time_s"] / self.dt) == 0)
             .nonzero(as_tuple=False)
@@ -159,22 +172,25 @@ class HumanoidEnv:
 
         self.reset_idx(self.reset_buf.nonzero(as_tuple=False).reshape((-1,)))
 
-        # compute reward
+        # compute reward - simplified for fixed speed forward walking
         self.rew_buf[:] = 0.0
         for name, reward_func in self.reward_functions.items():
             rew = reward_func() * self.reward_scales[name]
             self.rew_buf += rew
             self.episode_sums[name] += rew
 
-        # compute observations
+        # compute observations - reduced observation space for walking
+        # Only include essential observations for walking: 3+3+3+10+10+10 = 39
+        # We'll focus on leg joints (10) rather than all 23 joints
+        leg_joint_indices = list(range(10))  # First 10 joints are legs
         self.obs_buf = torch.cat(
             [
                 self.base_ang_vel * self.obs_scales["ang_vel"],  # 3
                 self.projected_gravity,  # 3
                 self.commands * self.commands_scale,  # 3
-                (self.dof_pos - self.default_dof_pos) * self.obs_scales["dof_pos"],  # 12
-                self.dof_vel * self.obs_scales["dof_vel"],  # 12
-                self.actions,  # 12
+                (self.dof_pos[:, leg_joint_indices] - self.default_dof_pos[leg_joint_indices]) * self.obs_scales["dof_pos"],  # 10 (legs only)
+                self.dof_vel[:, leg_joint_indices] * self.obs_scales["dof_vel"],  # 10 (legs only)
+                self.actions[:, leg_joint_indices],  # 10 (leg actions only)
             ],
             axis=-1,
         )
@@ -237,16 +253,36 @@ class HumanoidEnv:
         self.reset_idx(torch.arange(self.num_envs, device=gs.device))
         return self.obs_buf, None
 
-    # ------------ reward functions----------------
+    # ------------ reward functions - simplified for fixed speed forward walking ----------------
+    def _reward_forward_speed(self):
+        """Primary reward for maintaining target forward speed"""
+        speed_error = torch.abs(self.base_lin_vel[:, 0] - self.target_speed)
+        return torch.exp(-speed_error / 0.5)  # exponential reward with sigma=0.5
+
+    def _reward_upright(self):
+        """Keep the humanoid upright"""
+        return torch.exp(-torch.sum(torch.square(self.base_euler[:, :2]), dim=1) / 0.25)  # penalize roll/pitch
+
+    def _reward_stable(self):
+        """Penalize excessive lateral and vertical velocities"""
+        lateral_penalty = torch.square(self.base_lin_vel[:, 1])  # y-velocity
+        vertical_penalty = torch.square(self.base_lin_vel[:, 2])  # z-velocity
+        return -(lateral_penalty + vertical_penalty)
+
+    def _reward_smooth_actions(self):
+        """Encourage smooth actions"""
+        return -torch.sum(torch.square(self.last_actions - self.actions), dim=1)
+
+    # Legacy reward functions (can be removed if not used in config)
     def _reward_tracking_lin_vel(self):
         # Tracking of linear velocity commands (xy axes)
         lin_vel_error = torch.sum(torch.square(self.commands[:, :2] - self.base_lin_vel[:, :2]), dim=1)
-        return torch.exp(-lin_vel_error / self.reward_cfg["tracking_sigma"])
+        return torch.exp(-lin_vel_error / self.reward_cfg.get("tracking_sigma", 0.25))
 
     def _reward_tracking_ang_vel(self):
         # Tracking of angular velocity commands (yaw)
         ang_vel_error = torch.square(self.commands[:, 2] - self.base_ang_vel[:, 2])
-        return torch.exp(-ang_vel_error / self.reward_cfg["tracking_sigma"])
+        return torch.exp(-ang_vel_error / self.reward_cfg.get("tracking_sigma", 0.25))
 
     def _reward_lin_vel_z(self):
         # Penalize z axis base linear velocity
@@ -262,4 +298,4 @@ class HumanoidEnv:
 
     def _reward_base_height(self):
         # Penalize base height away from target
-        return torch.square(self.base_pos[:, 2] - self.reward_cfg["base_height_target"])
+        return torch.square(self.base_pos[:, 2] - self.reward_cfg.get("base_height_target", 1.0))

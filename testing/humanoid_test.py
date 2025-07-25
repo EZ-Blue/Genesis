@@ -26,7 +26,7 @@ plane = scene.add_entity(
     gs.morphs.Plane(),
 )
 humanoid = scene.add_entity(
-    gs.morphs.MJCF(file='/home/tom-wang/Documents/genesis/Genesis/genesis/assets/xml/humanoid/skeleton_torque.xml'),
+    gs.morphs.MJCF(file='/home/tom-wang/Documents/Genesis/genesis/assets/xml/humanoid/skeleton_torque.xml'),
 )
 
 cam = scene.add_camera(
