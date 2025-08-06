@@ -126,7 +126,7 @@ class LocoMujocoDataBridge:
         print(f"\nStep 2: Verifying joint name mapping...")
         
         if self.loco_trajectory is None:
-            print("✗ No trajectory loaded. Run load_trajectory() first.")
+            print("No trajectory loaded. Run load_trajectory() first.")
             return False, "No trajectory loaded"
         
         # Get joint names from both systems
@@ -168,17 +168,17 @@ class LocoMujocoDataBridge:
         
         if matched_joints:
             print(f"  - Matched Joints:")
-            for joint in matched_joints:
+            for joint in matched_joints[:5]:
                 print(f"    ✓ {joint}")
         
         if unmatched_loco:
             print(f"  - Unmatched LocoMujoco joints:")
-            for joint in unmatched_loco:
+            for joint in unmatched_loco[:5]:
                 print(f"    ⚠ {joint}")
         
         if unmatched_genesis:
             print(f"  - Unmatched Genesis DOFs:")
-            for dof in unmatched_genesis:
+            for dof in unmatched_genesis[:5]:
                 print(f"    ⚠ {dof}")
         
         # Validate assumption
@@ -264,7 +264,10 @@ class LocoMujocoDataBridge:
             # Verify tensor formats match Genesis conventions
             self._validate_genesis_format(genesis_trajectory)
             
-            print("✓ Step 3 completed: Data converted to Genesis format")
+            # print("✓ Step 3 completed: Data converted to Genesis format")
+
+            # print(f"[DEBUG] root_pos: {genesis_trajectory['root_pos']}\n")
+            # print(f"[DEBUG] root_quat: {genesis_trajectory['root_quat']}\n")
             return True, genesis_trajectory
             
         except Exception as e:
@@ -274,44 +277,78 @@ class LocoMujocoDataBridge:
             return False, str(e)
     
     def _convert_joint_data(self, loco_data, loco_info):
-        """Convert joint data with Genesis DOF ordering"""
+        """Convert joint data using Genesis DOF indexing approach (like Genesis examples)"""
         n_timesteps = loco_data.qpos.shape[0]
-        n_genesis_dofs = self.genesis_env.num_dofs
         
-        # Create Genesis tensors - matching Genesis RL format but for trajectories
-        genesis_dof_pos = torch.zeros((n_timesteps, n_genesis_dofs), 
-                                     dtype=torch.float32, device=self.device)
-        genesis_dof_vel = torch.zeros((n_timesteps, n_genesis_dofs), 
-                                     dtype=torch.float32, device=self.device)
+        print(f"    - Building Genesis DOF mapping following Genesis examples...")
         
-        print(f"    - Mapping {len(self.joint_mapping)} joints to Genesis DOF order...")
+        # Build ordered list of Genesis joints and their DOF indices (Genesis approach)
+        genesis_joint_names = []
+        genesis_dof_indices = []  # motors_dof_idx equivalent
+        loco_qpos_indices = []
+        loco_qvel_indices = []
         
-        # Map each joint using the verified mapping
+        # Map each joint using Genesis approach - EXCLUDE ROOT
         for loco_joint, genesis_joint in self.joint_mapping.items():
-            # Get Genesis DOF index (canonical ordering)
-            genesis_idx = self.genesis_env.dof_names.index(genesis_joint)
+            # Skip root joint - it's not controllable in Genesis (matches LocoMujoco behavior)
+            if loco_joint == 'root' or genesis_joint == 'root':
+                print(f"      Skipping root joint: {loco_joint} → {genesis_joint} (not controllable)")
+                continue
             
-            # Get LocoMujoco indices (handle qpos/qvel indexing)
-            loco_qpos_indices = loco_info.joint_name2ind_qpos[loco_joint]
-            loco_qvel_indices = loco_info.joint_name2ind_qvel[loco_joint]
-            
-            # Extract scalar index (most joints are 1-DOF)
-            loco_qpos_idx = loco_qpos_indices[0] if hasattr(loco_qpos_indices, '__getitem__') else loco_qpos_indices
-            loco_qvel_idx = loco_qvel_indices[0] if hasattr(loco_qvel_indices, '__getitem__') else loco_qvel_indices
-            
-            # Convert and assign - Genesis tensor format
-            genesis_dof_pos[:, genesis_idx] = torch.tensor(
-                loco_data.qpos[:, loco_qpos_idx], dtype=torch.float32, device=self.device)
-            genesis_dof_vel[:, genesis_idx] = torch.tensor(
-                loco_data.qvel[:, loco_qvel_idx], dtype=torch.float32, device=self.device)
+            try:
+                # Get Genesis DOF index using skeleton_humanoid.py approach (which works!)
+                genesis_joint_obj = self.genesis_env.robot.get_joint(genesis_joint)
+                
+                # Use the correct DOF indexing approach (skeleton_humanoid.py approach works!)
+                genesis_dof_idx = genesis_joint_obj.dof_start  # Same as skeleton_humanoid.py
+                
+                # Get LocoMujoco indices
+                loco_qpos_idx_array = loco_info.joint_name2ind_qpos[loco_joint]
+                loco_qvel_idx_array = loco_info.joint_name2ind_qvel[loco_joint]
+                
+                # Extract scalar index (most joints are 1-DOF)
+                loco_qpos_idx = loco_qpos_idx_array[0] if hasattr(loco_qpos_idx_array, '__getitem__') else loco_qpos_idx_array
+                loco_qvel_idx = loco_qvel_idx_array[0] if hasattr(loco_qvel_idx_array, '__getitem__') else loco_qvel_idx_array
+                
+                # Store mapping
+                genesis_joint_names.append(genesis_joint)
+                genesis_dof_indices.append(genesis_dof_idx)
+                loco_qpos_indices.append(loco_qpos_idx)
+                loco_qvel_indices.append(loco_qvel_idx)
+                
+                print(f"      ✓ Mapped: {loco_joint} → {genesis_joint} (Genesis DOF idx: {genesis_dof_idx}, LocoMujoco qpos: {loco_qpos_idx})")
+                
+            except Exception as e:
+                print(f"      ❌ Failed to map {loco_joint} → {genesis_joint}: {e}")
+                continue
+        
+        n_controllable_dofs = len(genesis_dof_indices)
+        print(f"    - Successfully mapped {n_controllable_dofs} controllable joints")
+        print(f"    - Genesis DOF indices: {genesis_dof_indices}")
+        
+        # Create trajectory data ordered by Genesis DOF indices (Genesis approach)
+        genesis_dof_pos = torch.zeros((n_timesteps, n_controllable_dofs), dtype=torch.float32, device=self.device)
+        genesis_dof_vel = torch.zeros((n_timesteps, n_controllable_dofs), dtype=torch.float32, device=self.device)
+        
+        # Fill trajectory data in Genesis DOF order
+        for i, (loco_qpos_idx, loco_qvel_idx) in enumerate(zip(loco_qpos_indices, loco_qvel_indices)):
+            genesis_dof_pos[:, i] = torch.tensor(loco_data.qpos[:, loco_qpos_idx], dtype=torch.float32, device=self.device)
+            genesis_dof_vel[:, i] = torch.tensor(loco_data.qvel[:, loco_qvel_idx], dtype=torch.float32, device=self.device)
+        
+        # Store DOF mapping for control (like Genesis examples)
+        self.genesis_dof_indices = genesis_dof_indices
+        self.genesis_joint_names = genesis_joint_names
+        
+        print(f"    - Trajectory data shape: pos{genesis_dof_pos.shape}, vel{genesis_dof_vel.shape}")
         
         return genesis_dof_pos, genesis_dof_vel
     
     def _convert_root_data(self, loco_data):
-        """Convert root state matching Genesis format"""
+        """Convert root state using LocoMujoco's joint indexing system"""
         n_timesteps = loco_data.qpos.shape[0]
+        loco_info = self.loco_trajectory.info
         
-        print(f"    - Converting root state data...")
+        print(f"    - Converting root state data using LocoMujoco joint indexing...")
         
         # Initialize with Genesis tensor format [timesteps, features]
         root_pos = torch.zeros((n_timesteps, 3), dtype=torch.float32, device=self.device)
@@ -319,14 +356,93 @@ class LocoMujocoDataBridge:
         root_lin_vel = torch.zeros((n_timesteps, 3), dtype=torch.float32, device=self.device)
         root_ang_vel = torch.zeros((n_timesteps, 3), dtype=torch.float32, device=self.device)
         
-        # Extract root data (typically first joint is free joint in skeleton models)
-        if loco_data.qpos.shape[1] >= 7:  # Free joint: [x,y,z,qw,qx,qy,qz]
-            root_pos = torch.tensor(loco_data.qpos[:, :3], dtype=torch.float32, device=self.device)
-            root_quat = torch.tensor(loco_data.qpos[:, 3:7], dtype=torch.float32, device=self.device)
+        # Find root joint using LocoMujoco's joint indexing system
+        root_joint_found = False
+        if 'root' in loco_info.joint_name2ind_qpos:
+            root_qpos_indices = loco_info.joint_name2ind_qpos['root']
+            root_qvel_indices = loco_info.joint_name2ind_qvel['root']
+            
+            print(f"      Found root joint at qpos indices: {root_qpos_indices}")
+            print(f"      Found root joint at qvel indices: {root_qvel_indices}")
+            
+            # Verify this is a freejoint (7 qpos DOF, 6 qvel DOF)
+            if len(root_qpos_indices) == 7 and len(root_qvel_indices) == 6:
+                # Extract root position: [x, y, z]
+                root_pos = torch.tensor(
+                    loco_data.qpos[:, root_qpos_indices[:3]], 
+                    dtype=torch.float32, device=self.device
+                )
+                
+                # Extract root quaternion: [qw, qx, qy, qz]
+                root_quat = torch.tensor(
+                    loco_data.qpos[:, root_qpos_indices[3:7]], 
+                    dtype=torch.float32, device=self.device
+                )
+                
+                # Extract root linear velocity: [vx, vy, vz]
+                root_lin_vel = torch.tensor(
+                    loco_data.qvel[:, root_qvel_indices[:3]], 
+                    dtype=torch.float32, device=self.device
+                )
+                
+                # Extract root angular velocity: [wx, wy, wz]
+                root_ang_vel = torch.tensor(
+                    loco_data.qvel[:, root_qvel_indices[3:6]], 
+                    dtype=torch.float32, device=self.device
+                )
+                
+                root_joint_found = True
+                print(f"      ✓ Root joint data extracted using LocoMujoco indices")
+                
+            else:
+                print(f"      ⚠️ Root joint has unexpected DOF count: qpos={len(root_qpos_indices)}, qvel={len(root_qvel_indices)}")
         
-        if loco_data.qvel.shape[1] >= 6:  # Free joint vel: [vx,vy,vz,wx,wy,wz] 
-            root_lin_vel = torch.tensor(loco_data.qvel[:, :3], dtype=torch.float32, device=self.device)
-            root_ang_vel = torch.tensor(loco_data.qvel[:, 3:6], dtype=torch.float32, device=self.device)
+        # Fallback: search for any freejoint in the joint list
+        if not root_joint_found:
+            print(f"      No 'root' joint found, searching for freejoint...")
+            for joint_name in loco_info.joint_names:
+                if joint_name in loco_info.joint_name2ind_qpos:
+                    qpos_indices = loco_info.joint_name2ind_qpos[joint_name]
+                    qvel_indices = loco_info.joint_name2ind_qvel[joint_name]
+                    
+                    # Check if this is a freejoint (7 qpos, 6 qvel)
+                    if len(qpos_indices) == 7 and len(qvel_indices) == 6:
+                        print(f"      Found freejoint '{joint_name}' at indices qpos={qpos_indices}, qvel={qvel_indices}")
+                        
+                        # Extract root data using this freejoint
+                        root_pos = torch.tensor(
+                            loco_data.qpos[:, qpos_indices[:3]], 
+                            dtype=torch.float32, device=self.device
+                        )
+                        root_quat = torch.tensor(
+                            loco_data.qpos[:, qpos_indices[3:7]], 
+                            dtype=torch.float32, device=self.device
+                        )
+                        root_lin_vel = torch.tensor(
+                            loco_data.qvel[:, qvel_indices[:3]], 
+                            dtype=torch.float32, device=self.device
+                        )
+                        root_ang_vel = torch.tensor(
+                            loco_data.qvel[:, qvel_indices[3:6]], 
+                            dtype=torch.float32, device=self.device
+                        )
+                        
+                        root_joint_found = True
+                        print(f"      ✓ Root data extracted from freejoint '{joint_name}'")
+                        break
+        
+        # Final fallback: use hardcoded indices (original logic)
+        if not root_joint_found:
+            print(f"      ⚠️ No freejoint found, using hardcoded root extraction (indices 0:7, 0:6)")
+            if loco_data.qpos.shape[1] >= 7:
+                root_pos = torch.tensor(loco_data.qpos[:, :3], dtype=torch.float32, device=self.device)
+                root_quat = torch.tensor(loco_data.qpos[:, 3:7], dtype=torch.float32, device=self.device)
+            
+            if loco_data.qvel.shape[1] >= 6:
+                root_lin_vel = torch.tensor(loco_data.qvel[:, :3], dtype=torch.float32, device=self.device)
+                root_ang_vel = torch.tensor(loco_data.qvel[:, 3:6], dtype=torch.float32, device=self.device)
+        
+        print(f"      Root data shapes: pos{root_pos.shape}, quat{root_quat.shape}, lin_vel{root_lin_vel.shape}, ang_vel{root_ang_vel.shape}")
         
         return root_pos, root_quat, root_lin_vel, root_ang_vel
     

@@ -19,7 +19,7 @@ from environments.skeleton_humanoid import SkeletonHumanoidEnv
 
 def get_joint_limits_from_xml():
     """Extract joint limits from XML file"""
-    xml_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/skeleton_restructured_panda_format.xml"
+    xml_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/genesis_skeleton_torque.xml"
     joint_limits = {}
     
     try:
@@ -51,7 +51,7 @@ def test_joint_ranges():
     # Create environment
     try:
         env = SkeletonHumanoidEnv(
-            num_envs=3,
+            num_envs=1,
             episode_length_s=20.0,
             dt=0.02,
             use_box_feet=True,

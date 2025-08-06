@@ -6,7 +6,7 @@
   <default>
     <default class="skeleton">
       <material specular="0.5" shininess="0.25"/>
-      <joint armature="0.01" damping="0.1" axis="0 0 1" limited="true" stiffness="0.0"/>
+      <joint armature="0.01" damping="1.0" axis="0 0 1" limited="true" stiffness="1.0"/>
       <general dyntype="none" biastype="affine"/>
       
       <default class="visual">
