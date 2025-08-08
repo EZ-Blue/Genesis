@@ -88,7 +88,11 @@ class GenesisLocoBaseEnv:
         """Initialize Genesis scene with appropriate settings"""
         self.scene = gs.Scene(
             show_FPS=False,
-            sim_options=gs.options.SimOptions(dt=self.dt, substeps=2),
+            sim_options=gs.options.SimOptions(
+                dt=self.dt, 
+                substeps=2,
+                # gravity=(0.0,0.0,0.0)
+            ),
             viewer_options=gs.options.ViewerOptions(
                 max_FPS=int(0.5 / self.dt),
                 camera_pos=(3.0, 0.0, 2.0),
@@ -101,6 +105,7 @@ class GenesisLocoBaseEnv:
                 constraint_solver=gs.constraint_solver.Newton,
                 enable_collision=True,
                 enable_joint_limit=True,
+                enable_self_collision = True,
             ),
             show_viewer=show_viewer,
         )

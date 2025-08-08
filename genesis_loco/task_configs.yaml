@@ -1,0 +1,279 @@
+# Task Configuration Templates for Unified Imitation Learning
+
+# Basic Locomotion Task
+locomotion_basic:
+  task:
+    name: "locomotion_basic"
+    datasets: ["walk"]
+  environment:
+    num_envs: 32
+    episode_length_s: 12.0
+    dt: 0.01
+    show_viewer: false
+  training:
+    max_episode_steps: 400
+    env_reward_weight: 0.15  # Focus on imitation
+    log_interval: 5
+    save_interval: 50
+    patience: 30
+    min_iterations: 50
+  policy:
+    hidden_layers: [512, 256]
+    activation: 'tanh'
+    learning_rate: 0.0003
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [256, 128]
+    activation: 'tanh'
+    learning_rate: 0.00005
+    use_running_norm: true
+
+# Advanced Locomotion Task
+locomotion_advanced:
+  task:
+    name: "locomotion_advanced" 
+    datasets: ["walk", "run", "jog", "walk_backwards"]
+  environment:
+    num_envs: 64
+    episode_length_s: 15.0
+    dt: 0.01
+    show_viewer: false
+  training:
+    max_episode_steps: 500
+    env_reward_weight: 0.1  # Strong imitation focus
+    log_interval: 10
+    save_interval: 100
+    patience: 50
+    min_iterations: 100
+  policy:
+    hidden_layers: [512, 256, 128]
+    activation: 'tanh'
+    learning_rate: 0.0003
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [256, 128, 64]
+    activation: 'tanh'
+    learning_rate: 0.0001
+    use_running_norm: true
+
+# Exercise and Fitness Task
+exercise_training:
+  task:
+    name: "exercise_training"
+    datasets: ["squat", "lunge_left", "lunge_right", "jumping_jacks"]
+  environment:
+    num_envs: 48
+    episode_length_s: 10.0
+    dt: 0.01
+    show_viewer: false
+  training:
+    max_episode_steps: 300
+    env_reward_weight: 0.2  # Slightly more env reward for exercises
+    log_interval: 8
+    save_interval: 75
+    patience: 40
+    min_iterations: 75
+  policy:
+    hidden_layers: [512, 256]
+    activation: 'tanh'
+    learning_rate: 0.0002
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [256, 128]
+    activation: 'tanh'
+    learning_rate: 0.00005
+    use_running_norm: true
+
+# Dance and Artistic Movement Task
+dance_training:
+  task:
+    name: "dance_training"
+    datasets: ["dance1", "dance2", "dance3"]
+  environment:
+    num_envs: 24
+    episode_length_s: 20.0  # Longer episodes for complex dance sequences
+    dt: 0.01
+    show_viewer: true  # Visual feedback helpful for dance
+  training:
+    max_episode_steps: 750
+    env_reward_weight: 0.05  # Very strong imitation focus for artistic movement
+    log_interval: 15
+    save_interval: 150
+    patience: 75
+    min_iterations: 150
+  policy:
+    hidden_layers: [768, 384, 192]  # Larger network for complex movements
+    activation: 'tanh'
+    learning_rate: 0.0002
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [384, 192, 96]
+    activation: 'tanh'
+    learning_rate: 0.00003
+    use_running_norm: true
+
+# Martial Arts Task
+martial_arts:
+  task:
+    name: "martial_arts"
+    datasets: ["punch_left", "punch_right", "kick_left", "kick_right", "block_high", "block_low"]
+  environment:
+    num_envs: 32
+    episode_length_s: 8.0  # Shorter episodes for combat moves
+    dt: 0.01
+    show_viewer: false
+  training:
+    max_episode_steps: 200
+    env_reward_weight: 0.25  # Balance between precision and task completion
+    log_interval: 5
+    save_interval: 50
+    patience: 25
+    min_iterations: 50
+  policy:
+    hidden_layers: [512, 256]
+    activation: 'tanh'
+    learning_rate: 0.0004  # Slightly higher LR for precise movements
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [256, 128]
+    activation: 'tanh'
+    learning_rate: 0.00008
+    use_running_norm: true
+
+# Single Task Templates (for focused training)
+walk_only:
+  task:
+    name: "walk_only"
+    datasets: ["walk"]
+  environment:
+    num_envs: 16
+    episode_length_s: 10.0
+    dt: 0.01
+    show_viewer: true
+  training:
+    max_episode_steps: 300
+    env_reward_weight: 0.2
+    log_interval: 3
+    save_interval: 25
+    patience: 20
+    min_iterations: 25
+  policy:
+    hidden_layers: [256, 128]
+    activation: 'tanh'
+    learning_rate: 0.0005
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [128, 64]
+    activation: 'tanh'
+    learning_rate: 0.0001
+    use_running_norm: true
+
+run_only:
+  task:
+    name: "run_only"
+    datasets: ["run"]
+  environment:
+    num_envs: 16
+    episode_length_s: 8.0
+    dt: 0.01
+    show_viewer: true
+  training:
+    max_episode_steps: 250
+    env_reward_weight: 0.15
+    log_interval: 3
+    save_interval: 25
+    patience: 20
+    min_iterations: 25
+  policy:
+    hidden_layers: [256, 128]
+    activation: 'tanh'
+    learning_rate: 0.0005
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [128, 64]
+    activation: 'tanh'
+    learning_rate: 0.0001
+    use_running_norm: true
+
+squat_only:
+  task:
+    name: "squat_only"
+    datasets: ["squat"]
+  environment:
+    num_envs: 16
+    episode_length_s: 6.0
+    dt: 0.01
+    show_viewer: true
+  training:
+    max_episode_steps: 150
+    env_reward_weight: 0.3  # Higher env reward for exercise completion
+    log_interval: 3
+    save_interval: 20
+    patience: 15
+    min_iterations: 20
+  policy:
+    hidden_layers: [256, 128]
+    activation: 'tanh'
+    learning_rate: 0.0004
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [128, 64]
+    activation: 'tanh'
+    learning_rate: 0.0001
+    use_running_norm: true
+
+# Debugging and Testing Configurations
+debug_quick:
+  task:
+    name: "debug_quick"
+    datasets: ["walk"]
+  environment:
+    num_envs: 2
+    episode_length_s: 3.0
+    dt: 0.05  # Lower frequency for faster testing
+    show_viewer: true
+  training:
+    max_episode_steps: 50
+    env_reward_weight: 0.5
+    log_interval: 1
+    save_interval: 5
+    patience: 5
+    min_iterations: 3
+  policy:
+    hidden_layers: [64, 32]
+    activation: 'tanh'
+    learning_rate: 0.001
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [32, 16]
+    activation: 'tanh'
+    learning_rate: 0.0005
+    use_running_norm: true
+
+# High-Performance Configuration (for powerful hardware)
+high_performance:
+  task:
+    name: "high_performance_locomotion"
+    datasets: ["walk", "run", "jog", "walk_backwards", "run_backwards", "skip"]
+  environment:
+    num_envs: 128
+    episode_length_s: 20.0
+    dt: 0.01  # Higher frequency
+    show_viewer: false
+  training:
+    max_episode_steps: 1000
+    env_reward_weight: 0.08  # Very strong imitation
+    log_interval: 20
+    save_interval: 200
+    patience: 100
+    min_iterations: 200
+  policy:
+    hidden_layers: [1024, 512, 256, 128]
+    activation: 'tanh'
+    learning_rate: 0.0001
+    clip_epsilon: 0.2
+  discriminator:
+    hidden_layers: [512, 256, 128, 64]
+    activation: 'tanh'
+    learning_rate: 0.00002
+    use_running_norm: true

@@ -240,8 +240,9 @@ def test_amp_genesis_integration():
         skeleton_env = SkeletonHumanoidEnv(
             num_envs=4,  # Small batch for testing
             episode_length_s=5.0,
-            dt=0.02,
-            show_viewer=False
+            dt=0.01,
+            show_viewer=False,
+            use_trajectory_control=True,
         )
         print(f"   ✓ Environment: {skeleton_env.num_envs} envs, {skeleton_env.num_observations} obs dim")
         

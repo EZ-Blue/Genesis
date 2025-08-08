@@ -27,7 +27,8 @@ def analyze_control_parameters():
         num_envs=1,
         episode_length_s=5.0,
         dt=0.019,  # 50Hz
-        show_viewer=False
+        show_viewer=False,
+        use_trajectory_control=True
     )
     
     print(f"Genesis Control Setup:")

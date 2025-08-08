@@ -36,15 +36,24 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
                  use_box_feet: bool = True,
                  disable_arms: bool = False,
                  show_viewer: bool = False,
+                 use_trajectory_control: bool = False,
                  **kwargs):
         
         self.use_box_feet = use_box_feet
         self.disable_arms = disable_arms
+        self.use_trajectory_control = use_trajectory_control
         
-        # Initialize base environment
+        # Initialize base environment - select XML based on box_feet setting
+        if use_box_feet:
+            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
+            print(f"Using LocoMujoco-style box feet for stable ground contact")
+        else:
+            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/revised_genesis_skeleton.xml"
+            print(f"Using standard foot collision meshes")
+            
         super().__init__(
             num_envs=num_envs,
-            robot_file="/home/ez/Documents/Genesis/genesis_loco/skeleton/genesis_skeleton_torque.xml",
+            robot_file=robot_file,
             dt=dt,
             episode_length_s=episode_length_s,
             obs_cfg=self._get_obs_config(),
@@ -80,17 +89,59 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         # Get action specification matching LocoMujoco
         self._setup_action_spec()
         
-        # Setup torque control
-        self._setup_torque_control()
+        # Setup control mode based on use case
+        if self.use_trajectory_control:
+            self.setup_trajectory_pd_control()
+        else:
+            # self._setup_torque_control()
+            self.setup_pd_control
+        
+        # Box feet are handled at XML level - no runtime addition needed
+        if self.use_box_feet:
+            print(f"    ✅ Box feet enabled via XML configuration")
         
         # Initialize buffers
         self._init_skeleton_buffers()
     
-    def _setup_action_spec(self):
-        """Setup action specification with direct LocoMujoco action name to joint index mapping"""
-        # print(f"Available DOF names: {self.dof_names}")
+    def _get_motors_info(self):
+        """Get controllable motor DOF indices and names using Genesis' approach"""
+        import genesis as gs
         
-        # Direct mapping from LocoMujoco action names to Genesis joint indices
+        motors_dof_idx = []
+        motors_dof_name = []
+        
+        for joint in self.robot.joints:
+            # Skip non-controllable joints (same as Genesis view function)
+            if joint.type == gs.JOINT_TYPE.FREE:
+                continue
+            elif joint.type == gs.JOINT_TYPE.FIXED:
+                continue
+            
+            # Get DOF indices using Genesis' correct method
+            dofs_idx_local = self.robot.get_joint(joint.name).dofs_idx_local
+            if dofs_idx_local:
+                if len(dofs_idx_local) == 1:
+                    dofs_name = [joint.name]
+                else:
+                    # Multi-DOF joints get suffixed names
+                    dofs_name = [f"{joint.name}_{i_d}" for i_d in dofs_idx_local]
+                
+                motors_dof_idx += dofs_idx_local
+                motors_dof_name += dofs_name
+        
+        return motors_dof_idx, motors_dof_name
+
+    def _setup_action_spec(self):
+        """Setup action specification using Genesis' proven motor detection approach"""
+        
+        # Get all controllable motors using Genesis' method
+        motors_dof_idx, motors_dof_name = self._get_motors_info()
+        
+        print(f"Genesis detected {len(motors_dof_idx)} controllable DOFs:")
+        for idx, (dof_idx, dof_name) in enumerate(zip(motors_dof_idx, motors_dof_name)):
+            print(f"  {idx:2d}: DOF {dof_idx:2d} = {dof_name}")
+        
+        # LocoMujoco action name to joint name mapping
         action_to_joint_mapping = {
             # Lumbar spine
             "mot_lumbar_ext": "lumbar_extension",
@@ -134,27 +185,35 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
             "mot_wrist_dev_l": "wrist_dev_l",
         }
         
-        # Build action spec and direct joint index mapping
+        # Build action spec using Genesis-detected motors
         self.action_spec = []
         self.action_to_joint_idx = {}
         
+        print(f"\nMapping LocoMujoco actions to Genesis motors:")
         for action_name, joint_name in action_to_joint_mapping.items():
-            if joint_name in self.dof_names:
+            # Find this joint in the motors detected by Genesis
+            if joint_name in motors_dof_name:
+                motor_idx = motors_dof_name.index(joint_name)
+                dof_idx = motors_dof_idx[motor_idx]
+                
                 # Apply filtering rules
                 if self.use_box_feet and action_name in ["mot_subtalar_angle_l", "mot_mtp_angle_l", 
                                                         "mot_subtalar_angle_r", "mot_mtp_angle_r"]:
+                    print(f"  {action_name}: FILTERED (box feet enabled)")
                     continue
-                self.action_to_joint_idx[action_name] = self.robot.get_joint(joint_name).dof_idx_local
-                local_dof_idx = self.robot.get_joint(joint_name).dof_idx_local
-                local_joint_idx = self.robot.get_joint(joint_name).idx_local
-                # print(f"Action name: {action_name}, Joint name: {joint_name}, Joint_index: {local_joint_idx}, Dof_idx_local: {local_dof_idx}")
+                
+                self.action_to_joint_idx[action_name] = dof_idx
                 self.action_spec.append(action_name)
-            
+                print(f"  {action_name}: {joint_name} -> DOF {dof_idx} ✅")
+            else:
+                print(f"  {action_name}: {joint_name} -> NOT FOUND ❌")
+        
         self.num_skeleton_actions = len(self.action_spec)
         
-        print(f"Skeleton actions: {self.num_skeleton_actions}")
-        print(f"Action spec: {self.action_spec}")
-        print(f"Action to joint mapping: {self.action_to_joint_idx}")
+        print(f"\nFinal action specification:")
+        print(f"  Total actions: {self.num_skeleton_actions}")
+        print(f"  Action names: {self.action_spec}")
+        print(f"  DOF mapping: {self.action_to_joint_idx}")
     
     def _setup_torque_control(self):
         """Setup pure torque control using control_dofs_force"""
@@ -172,8 +231,7 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         limits = torch.ones(self.num_dofs, device=self.device) * torque_limit
         self.robot.set_dofs_force_range(-limits, limits)
         
-        # print(f"Torque control setup complete. Using control_dofs_force with limits: ±{torque_limit}")
-        # print("Note: Explicitly zeroed PD gains and using control_dofs_force")
+        print(f"Pure torque control enabled with limits: ±{torque_limit} N⋅m")
     
     def setup_pd_control(self):
         """Setup PD gains matching LocoMujoco skeleton_torque configuration"""
@@ -234,8 +292,8 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
                 joint_obj = self.robot.get_joint(joint_name)
                 dof_idx = joint_obj.dof_idx_local
                 if dof_idx < self.num_dofs:
-                    kp_values[dof_idx] = float(kp)
-                    kv_values[dof_idx] = float(kv)
+                    kp_values[dof_idx] = float(kp) 
+                    kv_values[dof_idx] = float(kv) 
                     applied_count += 1
                     print(f"    Applied LocoMujoco gains: {joint_name} (DOF {dof_idx}): kp={kp}, kv={kv}")
             except Exception as e:
@@ -261,6 +319,87 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         else:
             print("    ⚠️  Warning: PD gains may not have been applied correctly")
     
+    def setup_trajectory_pd_control(self):
+        """Setup trajectory-optimized PD gains for smooth position tracking"""
+        print("Setting up trajectory-optimized PD control gains...")
+        
+        # CRITICAL: Use much lower, smooth PD gains optimized for trajectory following
+        kp_values = torch.zeros(self.num_dofs, device=self.device)
+        kv_values = torch.zeros(self.num_dofs, device=self.device)
+        
+        # Trajectory-optimized PD gains (much lower than LocoMujoco training gains)
+        trajectory_pd_gains = {
+            # Spine joints - low gains for smooth motion
+            "lumbar_extension": (50, 8),
+            "lumbar_bending": (50, 8),
+            "lumbar_rotation": (30, 6),
+            
+            # Leg joints - moderate gains for stability
+            "hip_flexion_r": (80, 10),
+            "hip_adduction_r": (80, 10),
+            "hip_rotation_r": (60, 8),
+            "knee_angle_r": (100, 12),
+            "ankle_angle_r": (60, 8),
+            "subtalar_angle_r": (20, 4),
+            "mtp_angle_r": (20, 4),
+            
+            "hip_flexion_l": (80, 10),
+            "hip_adduction_l": (80, 10), 
+            "hip_rotation_l": (60, 8),
+            "knee_angle_l": (100, 12),
+            "ankle_angle_l": (60, 8),
+            "subtalar_angle_l": (20, 4),
+            "mtp_angle_l": (20, 4),
+            
+            # Arm joints - very low gains for smooth motion
+            "arm_flex_r": (30, 6),
+            "arm_add_r": (30, 6),
+            "arm_rot_r": (25, 5),
+            "elbow_flex_r": (40, 6),
+            "pro_sup_r": (20, 4),
+            "wrist_flex_r": (15, 3),
+            "wrist_dev_r": (15, 3),
+            
+            "arm_flex_l": (30, 6),
+            "arm_add_l": (30, 6),
+            "arm_rot_l": (25, 5),
+            "elbow_flex_l": (40, 6),
+            "pro_sup_l": (20, 4),
+            "wrist_flex_l": (15, 3),
+            "wrist_dev_l": (15, 3),
+        }
+        
+        # Apply trajectory-optimized gains
+        applied_count = 0
+        for joint_name, (kp, kv) in trajectory_pd_gains.items():
+            try:
+                joint_obj = self.robot.get_joint(joint_name)
+                dof_idx = joint_obj.dofs_idx_local[0] if joint_obj.dofs_idx_local else None
+                if dof_idx is not None and dof_idx < self.num_dofs:
+                    kp_values[dof_idx] = float(kp)
+                    kv_values[dof_idx] = float(kv)
+                    applied_count += 1
+                    print(f"    Applied trajectory gains: {joint_name} (DOF {dof_idx}): kp={kp}, kv={kv}")
+            except Exception as e:
+                print(f"    Warning: Could not set trajectory gains for {joint_name}: {e}")
+        
+        print(f"    Successfully applied trajectory gains to {applied_count}/{len(trajectory_pd_gains)} joints")
+        
+        # Apply gains to robot
+        self.robot.set_dofs_kp(kp_values)
+        self.robot.set_dofs_kv(kv_values)
+        
+        # Verify gains
+        actual_kp = self.robot.get_dofs_kp()
+        actual_kv = self.robot.get_dofs_kv()
+        
+        print(f"    Trajectory-optimized PD gains applied:")
+        print(f"    - kp: min={actual_kp.min():.1f}, max={actual_kp.max():.1f}, mean={actual_kp.mean():.1f}")
+        print(f"    - kv: min={actual_kv.min():.1f}, max={actual_kv.max():.1f}, mean={actual_kv.mean():.1f}")
+        
+        print("    ✅ Trajectory-optimized control enabled")
+    
+
     def _init_skeleton_buffers(self):
         """Initialize skeleton-specific state buffers"""
         # Previous actions for observations and smoothness
@@ -275,23 +414,31 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         self.target_velocity[:, 0] = 1.0  # Default forward velocity
     
     def _apply_actions(self, actions: torch.Tensor):
-        """Apply torque actions directly to joints using direct mapping"""
+        """Apply torque actions directly to joints using correct Genesis DOF control"""
         
-        # Create torque tensor
-        torques = torch.zeros((self.num_envs, self.num_dofs), device=self.device)
+        # CRITICAL FIX: Create torque tensor with correct dimensions for controllable DOFs only
+        num_controllable_dofs = len(self.action_to_joint_idx)
+        torques = torch.zeros((self.num_envs, num_controllable_dofs), device=self.device)
         
-        # Direct mapping using pre-computed indices
+        # CRITICAL FIX: Get DOF indices for explicit control (matching motor detection)
+        controllable_dof_indices = []
+        
+        # Direct mapping using pre-computed indices (in action order)
         for i, action_name in enumerate(self.action_spec):
             if i < actions.shape[-1]:  # Ensure we don't exceed action dimensions
                 joint_idx = self.action_to_joint_idx[action_name]
-                torques[:, joint_idx] = actions[:, i]
+                torques[:, i] = actions[:, i]  # FIXED: Use action index, not joint index
+                controllable_dof_indices.append(joint_idx)
         
-        # Apply torques using control_dofs_force
-        self.robot.control_dofs_force(torques)
+        # CRITICAL FIX: Apply torques to specific DOFs only using explicit indices
+        # This avoids the double indexing problem by using local DOF indices
+        self.robot.control_dofs_force(torques, dofs_idx_local=controllable_dof_indices)
         
-        # Track energy consumption
-        power = torch.sum(torch.abs(torques * self.dof_vel), dim=1)
-        self.energy_consumption += power * self.dt
+        # Track energy consumption (using explicit DOF selection)
+        if hasattr(self, 'dof_vel'):
+            controlled_dof_vel = self.dof_vel[:, controllable_dof_indices] if len(controllable_dof_indices) > 0 else self.dof_vel[:, :num_controllable_dofs]
+            power = torch.sum(torch.abs(torques * controlled_dof_vel), dim=1)
+            self.energy_consumption += power * self.dt
     
     
     def _get_observations(self) -> torch.Tensor:
