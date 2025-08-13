@@ -16,7 +16,7 @@ from typing import Dict, Any
 # Fix import paths
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from environments.skeleton_humanoid import SkeletonHumanoidEnv
+from environments.skeleton_humanoid_refactored import SkeletonHumanoidEnv
 from integration.data_bridge import LocoMujocoDataBridge
 import genesis as gs
 
@@ -53,7 +53,6 @@ class SimpleWalkingTrainer:
             episode_length_s=self.config.get('episode_length_s', 5.0),
             dt=self.config.get('dt', 0.02),
             show_viewer=self.config.get('show_viewer', True),
-            use_trajectory_control=False,  # Use torque control for training
             use_box_feet=True  # Enable stable ground contact
         )
         
@@ -172,7 +171,7 @@ class SimpleWalkingTrainer:
         # Test 3: Action space validation
         print(f"\n🎯 Action Space Validation:")
         print(f"   Environment action dim: {self.env.num_actions}")
-        print(f"   Skeleton actions: {self.env.num_skeleton_actions}")
+        print(f"   Skeleton actions: {self.env.num_actions}")
         print(f"   Action mapping: {len(self.env.action_to_joint_idx) if hasattr(self.env, 'action_to_joint_idx') else 'Not available'}")
         
         # Test 4: Reward system validation

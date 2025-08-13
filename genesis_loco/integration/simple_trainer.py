@@ -136,7 +136,7 @@ class SimpleImitationTrainer:
         
         # Import skeleton environment
         sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from environments.skeleton_humanoid import SkeletonHumanoidEnv
+        from environments.skeleton_humanoid_refactored import SkeletonHumanoidEnv
         
         self.env = SkeletonHumanoidEnv(
             num_envs=self.config['num_envs'],
