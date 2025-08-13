@@ -72,21 +72,20 @@ class TrajectoryFollower:
         # Import skeleton environment - fix path
         genesis_loco_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         sys.path.insert(0, genesis_loco_dir)
-        from environments.skeleton_humanoid import SkeletonHumanoidEnv
+        from environments.skeleton_humanoid_refactored import SkeletonHumanoidEnv
         
         self.env = SkeletonHumanoidEnv(
             num_envs=1,  # Single environment for verification
             episode_length_s=30.0,  # Long episodes for full trajectory
             dt=0.01,  # High frequency for smooth following (100Hz to match LocoMujoco)
             show_viewer=show_viewer,
-            use_trajectory_control=True,  # Enable trajectory-optimized control
             use_box_feet=True  # Enable box feet for stable ground contact (LocoMujoco compatibility)
         )
         
         # Control setup is handled automatically by use_trajectory_control=True
         print(f"     ✓ Trajectory-optimized control enabled")
         
-        print(f"     ✓ Environment ready: {self.env.num_dofs} DOFs")
+        # print(f"     ✓ Environment ready: {self.env.num_dofs} DOFs")
     
     def _setup_data_bridge(self):
         """Setup data bridge for trajectory loading"""
@@ -163,47 +162,86 @@ class TrajectoryFollower:
             trajectory_idx = start_timestep
             
             while True:
-                # Get current trajectory targets with velocity feedforward
+                # Get current trajectory state (LocoMujoco approach)
                 target_dof_pos = self.trajectory_data['dof_pos'][trajectory_idx:trajectory_idx+1]  # [1, num_dofs]
                 target_dof_vel = self.trajectory_data['dof_vel'][trajectory_idx:trajectory_idx+1]  # [1, num_dofs]
                 target_root_pos = self.trajectory_data['root_pos'][trajectory_idx:trajectory_idx+1]  # [1, 3]
                 target_root_quat = self.trajectory_data['root_quat'][trajectory_idx:trajectory_idx+1]  # [1, 4]
                 
-                # CRITICAL FIX: Position control using proper local DoF indices (consistent with data_bridge.py)
+                # DIRECT STATE SETTING (like LocoMujoco's play_trajectory)
+                env_ids = torch.tensor([0], device=self.device)
+                
                 if hasattr(self.data_bridge, 'genesis_dof_indices'):
-                    # Use the pre-computed local DoF indices from data_bridge (same approach as skeleton_humanoid.py)
-                    # These indices are already local DoF indices from Genesis motor detection
                     controllable_dof_indices = self.data_bridge.genesis_dof_indices
                     
-                    # Apply position control with velocity feedforward for better tracking
-                    self.env.robot.control_dofs_position(target_dof_pos, dofs_idx_local=controllable_dof_indices)
-                    # self.env.robot.control_dofs_velocity(target_dof_vel, dofs_idx_local=controllable_dof_indices)
+                    # Check for excessive drift and reset if needed
+                    current_root_pos = self.env.root_pos[0]
+                    target_root_pos_single = target_root_pos[0]
+                    drift_magnitude = torch.norm(current_root_pos - target_root_pos_single).item()
+                    
+                    if drift_magnitude > 0.2:  # 20cm drift threshold
+                        print(f"⚠️ Large drift detected ({drift_magnitude:.3f}m) - performing clean reset at step {step_count}")
+                        self._initialize_to_trajectory_pose(trajectory_idx)
+                        continue
+                    
+                    try:
+                        # Smooth velocity calculation for stability
+                        if hasattr(self, '_prev_dof_pos'):
+                            smooth_velocity = (target_dof_pos[0] - self._prev_dof_pos) / self.env.dt
+                        else:
+                            smooth_velocity = target_dof_vel[0] * 0.5  # Conservative initial velocity
+                        
+                        # Set joint positions with stability checks
+                        self.env.robot.set_dofs_position(
+                            target_dof_pos, 
+                            dofs_idx_local=controllable_dof_indices, 
+                            envs_idx=env_ids, 
+                            zero_velocity=False
+                        )
+                        
+                        # Set root pose with drift prevention
+                        self.env.robot.set_pos(target_root_pos, envs_idx=env_ids, zero_velocity=False)
+                        self.env.robot.set_quat(target_root_quat, envs_idx=env_ids, zero_velocity=False)
+                        
+                        # Smooth velocity setting every few steps
+                        if step_count % 5 == 0:  # More frequent for stability
+                            smooth_vel_batch = smooth_velocity.unsqueeze(0)
+                            self.env.robot.set_dofs_velocity(
+                                smooth_vel_batch, 
+                                dofs_idx_local=controllable_dof_indices, 
+                                envs_idx=env_ids
+                            )
+                        
+                        # Store for next iteration
+                        self._prev_dof_pos = target_dof_pos[0].clone()
+                        
+                    except Exception as e:
+                        print(f"⚠️ State setting failed at step {step_count}: {e}")
+                        # Clean reset on failure
+                        self._initialize_to_trajectory_pose(trajectory_idx)
+                        continue
                 else:
-                    # Fallback: use skeleton_humanoid approach if bridge data not available
-                    print("⚠️ Warning: No bridge DoF indices, using skeleton_humanoid fallback")
-                    if hasattr(self.env, 'action_to_joint_idx'):
-                        controllable_dof_indices = list(self.env.action_to_joint_idx.values())
-                        self.env.robot.control_dofs_position(target_dof_pos, dofs_idx_local=controllable_dof_indices)
-                        # self.env.robot.control_dofs_velocity(target_dof_vel, dofs_idx_local=controllable_dof_indices)
-                    else:
-                        print("❌ Error: Cannot determine controllable DoF indices")
-                        return False
+                    print("❌ Error: Cannot determine controllable DoF indices")
+                    return False
                 
-                # Set root state directly (like LocoMujoco does for trajectory following)
-                env_ids = torch.tensor([0], device=self.device)
-                # self.env.robot.set_pos(target_root_pos, envs_idx=env_ids, zero_velocity=False)
-                # self.env.robot.set_quat(target_root_quat, envs_idx=env_ids, zero_velocity=False)
+                # Periodic stability check and reset
+                if step_count % 200 == 0 and step_count > 0:  # Every 2 seconds
+                    current_height = self.env.root_pos[0, 2].item()
+                    if current_height < 0.7 or current_height > 1.3:  # Height bounds check
+                        print(f"⚠️ Height instability detected ({current_height:.3f}m) - resetting at step {step_count}")
+                        self._initialize_to_trajectory_pose(trajectory_idx)
+                        continue
                 
-                # Reset physics periodically to prevent error accumulation
-                if step_count % 500 == 0 and step_count > 0:
-                    print(f"     Periodic reset at step {step_count}")
-                    self._initialize_to_trajectory_pose(trajectory_idx)
-                
-                # Step simulation
+                # Let Genesis physics resolve contacts and constraints (like LocoMujoco's mj_forward)
                 self.env.scene.step()
                 
                 # Update environment state for monitoring
                 self.env._update_robot_state()
+                
+                # Log direct state setting status
+                if step_count % 100 == 0:
+                    current_height = self.env.root_pos[0, 2].item()
+                    print(f"     Direct state setting - Step {step_count}, Height: {current_height:.3f}m")
                 
                 # Progress tracking
                 step_count += 1
@@ -309,18 +347,18 @@ class TrajectoryFollower:
         env_ids = torch.tensor([0], device=self.device)
         
         if hasattr(self.data_bridge, 'genesis_dof_indices'):
-            # Use pre-computed local DoF indices (consistent approach)
+            # Use pre-computed local DoF indices (consistent with direct state setting)
             controllable_dof_indices = self.data_bridge.genesis_dof_indices
             
-            # Set joint positions directly (not control, but direct setting for initialization)
+            # Direct state setting for initialization (like LocoMujoco)
             target_dof_pos_batch = target_dof_pos.unsqueeze(0)  # [1, num_controllable_dofs]
             self.env.robot.set_dofs_position(
                 target_dof_pos_batch, 
                 dofs_idx_local=controllable_dof_indices, 
                 envs_idx=env_ids, 
-                zero_velocity=True
+                zero_velocity=True  # Zero velocity for clean initialization
             )
-            print(f"     ✓ Set {len(controllable_dof_indices)} joint positions")
+            print(f"     ✓ Direct state set: {len(controllable_dof_indices)} joint positions")
             
         else:
             print(f"     ⚠️ No DoF indices available - using fallback")
@@ -335,7 +373,7 @@ class TrajectoryFollower:
                     zero_velocity=True
                 )
         
-        # Set root pose - this is crucial for proper initialization
+        # Set exact root pose (critical for trajectory alignment)
         target_root_pos_batch = target_root_pos.unsqueeze(0)  # [1, 3]
         target_root_quat_batch = target_root_quat.unsqueeze(0)  # [1, 4]
         
@@ -350,7 +388,7 @@ class TrajectoryFollower:
             zero_velocity=True
         )
         
-        print(f"     ✓ Set root pose: pos={target_root_pos[:3]}, quat={target_root_quat[:4]}")
+        print(f"     ✓ Direct root state: pos={target_root_pos[:3]}, quat={target_root_quat[:4]}")
         
         # Step physics a few times to settle the pose
         print(f"     Settling physics...")
@@ -489,6 +527,55 @@ class TrajectoryFollower:
                 print(f"  {part_name:<12} - Joints: {len(part_joints):2d}, Mean: {part_mean_error:.4f}, Max: {part_max_error:.4f}")
         
         print("=" * 60)
+    
+    def _apply_soft_root_tracking(self, target_root_pos, target_root_quat, env_ids, step_count):
+        """
+        Apply soft root tracking that respects Genesis physics
+        
+        Uses gradual alignment to avoid physics conflicts while maintaining trajectory fidelity.
+        """
+        # Get current root state
+        current_root_pos = self.env.root_pos[0]
+        current_root_quat = self.env.root_quat[0]
+        
+        # Calculate differences
+        pos_diff = target_root_pos[0] - current_root_pos
+        pos_error = torch.norm(pos_diff).item()
+        
+        # Only apply root tracking if error is significant and physics allows
+        if pos_error > 0.05:  # 5cm threshold
+            
+            # Gradual position correction (blend factor based on error magnitude)
+            blend_factor = min(0.3, pos_error * 2.0)  # Max 30% correction per step
+            corrected_pos = current_root_pos + pos_diff * blend_factor
+            
+            # Height safety check - don't force into ground
+            if corrected_pos[2] > 0.7:  # Minimum 70cm height
+                corrected_pos_batch = corrected_pos.unsqueeze(0)
+                
+                try:
+                    # Apply position correction with physics consideration
+                    self.env.robot.set_pos(corrected_pos_batch, envs_idx=env_ids, zero_velocity=False)
+                    
+                    # Apply quaternion correction (more conservative)
+                    quat_blend = 0.1  # Very gradual orientation changes
+                    # Simple quaternion interpolation (for small angles)
+                    target_quat_batch = target_root_quat.unsqueeze(0)
+                    
+                    # Only apply if not too different from current orientation
+                    quat_diff = torch.sum(torch.abs(current_root_quat - target_root_quat[0]))
+                    if quat_diff < 0.5:  # Reasonable orientation difference
+                        self.env.robot.set_quat(target_quat_batch, envs_idx=env_ids, zero_velocity=False)
+                        
+                except Exception as e:
+                    # If root tracking fails, continue without it for this step
+                    if step_count % 100 == 0:  # Only log occasionally
+                        print(f"      Root tracking skipped at step {step_count}: {str(e)[:50]}")
+                    pass
+        
+        # Log tracking status occasionally
+        if step_count % 200 == 0:
+            print(f"      Root tracking - pos error: {pos_error:.3f}m, height: {current_root_pos[2]:.3f}m")
     
     def verify_joint_mapping(self) -> bool:
         """

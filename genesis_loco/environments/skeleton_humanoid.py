@@ -24,6 +24,7 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
     Skeleton Humanoid Environment using torque control
     
     Matches LocoMujoco's SkeletonTorque environment structure:
+    - 31 total actions
     - 27 actions (after removing foot joints with box feet)
     - 59 observations (root + joint states)
     - Torque control with direct force application
@@ -33,7 +34,7 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
                  num_envs: int = 1024,
                  episode_length_s: float = 10.0,
                  dt: float = 0.02,
-                 use_box_feet: bool = True,
+                 use_box_feet: bool = False,
                  disable_arms: bool = False,
                  show_viewer: bool = False,
                  use_trajectory_control: bool = False,
@@ -91,10 +92,10 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         
         # Setup control mode based on use case
         if self.use_trajectory_control:
-            self.setup_trajectory_pd_control()
+            self.setup_balanced_pd_control()  # Use balanced gains instead
         else:
             # self._setup_torque_control()
-            self.setup_pd_control
+            self.setup_pd_control()
         
         # Box feet are handled at XML level - no runtime addition needed
         if self.use_box_feet:
@@ -102,6 +103,9 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         
         # Initialize buffers
         self._init_skeleton_buffers()
+        
+        # Register reward functions for base class
+        self._register_reward_functions()
     
     def _get_motors_info(self):
         """Get controllable motor DOF indices and names using Genesis' approach"""
@@ -399,6 +403,68 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         
         print("    ✅ Trajectory-optimized control enabled")
     
+    def setup_balanced_pd_control(self):
+        """Balanced PD gains for stable trajectory following"""
+        print("Setting up balanced PD control gains...")
+        
+        kp_values = torch.ones(self.num_dofs, device=self.device) * 80.0
+        kv_values = torch.ones(self.num_dofs, device=self.device) * 8.0
+        
+        # Balanced gains - compromise between LocoMujoco (high) and trajectory (low) values
+        gains = {
+            # Spine - moderate for posture
+            "lumbar_extension": (120, 10), "lumbar_bending": (100, 9), "lumbar_rotation": (80, 8),
+            # Legs - higher for stability 
+            "hip_flexion_r": (140, 12), "hip_adduction_r": (120, 10), "hip_rotation_r": (100, 9),
+            "hip_flexion_l": (140, 12), "hip_adduction_l": (120, 10), "hip_rotation_l": (100, 9),
+            "knee_angle_r": (180, 14), "knee_angle_l": (180, 14),
+            "ankle_angle_r": (100, 10), "ankle_angle_l": (100, 10),
+            "subtalar_angle_r": (60, 6), "subtalar_angle_l": (60, 6),
+            "mtp_angle_r": (40, 5), "mtp_angle_l": (40, 5),
+            # Arms - lower for natural motion
+            "arm_flex_r": (60, 7), "arm_add_r": (50, 6), "arm_rot_r": (40, 5), "elbow_flex_r": (70, 7),
+            "arm_flex_l": (60, 7), "arm_add_l": (50, 6), "arm_rot_l": (40, 5), "elbow_flex_l": (70, 7),
+            "pro_sup_r": (30, 4), "wrist_flex_r": (25, 3), "wrist_dev_r": (25, 3),
+            "pro_sup_l": (30, 4), "wrist_flex_l": (25, 3), "wrist_dev_l": (25, 3),
+        }
+        
+        # Apply gains
+        applied = 0
+        for joint_name, (kp, kv) in gains.items():
+            try:
+                joint_obj = self.robot.get_joint(joint_name)
+                dof_idx = joint_obj.dofs_idx_local[0] if hasattr(joint_obj, 'dofs_idx_local') else joint_obj.dof_idx_local
+                if dof_idx < self.num_dofs:
+                    kp_values[dof_idx] = float(kp)
+                    kv_values[dof_idx] = float(kv)
+                    applied += 1
+            except:
+                continue
+        
+        self.robot.set_dofs_kp(kp_values)
+        self.robot.set_dofs_kv(kv_values)
+        
+        actual_kp = self.robot.get_dofs_kp()
+        actual_kv = self.robot.get_dofs_kv()
+        print(f"    Applied to {applied}/{len(gains)} joints")
+        print(f"    kp: {actual_kp.min():.1f}-{actual_kp.max():.1f} (avg: {actual_kp.mean():.1f})")
+        print(f"    kv: {actual_kv.min():.1f}-{actual_kv.max():.1f} (avg: {actual_kv.mean():.1f})")
+        print("    ✅ Balanced PD gains applied")
+    
+    def _register_reward_functions(self):
+        """Register reward functions with the base class reward system"""
+        # Ensure reward_functions dict exists (from base class _init_reward_functions)
+        if not hasattr(self, 'reward_functions'):
+            self.reward_functions = {}
+        
+        # Register skeleton-specific reward functions
+        self.reward_functions.update({
+            'upright_orientation': self._reward_upright_orientation,
+            'energy_efficiency': self._reward_energy_efficiency, 
+            'root_height': self._reward_root_height,
+        })
+        print(f"    ✅ Registered {len(self.reward_functions)} reward functions")
+    
 
     def _init_skeleton_buffers(self):
         """Initialize skeleton-specific state buffers"""
@@ -473,15 +539,23 @@ class SkeletonHumanoidEnv(GenesisLocoBaseEnv):
         return obs
     
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
-        """Step environment with action history tracking"""
+        """Step environment with action history tracking and proper episode management"""
         # Store for next observation
         self._current_actions = actions.clone()
+        
+        # Episode length is handled by parent class
         
         # Call parent step
         obs, rewards, dones, info = super().step(actions)
         
-        # Update action history
+        # Update action history for skeleton-specific observations
         self.prev_actions[:] = actions[:, :self.num_skeleton_actions]
+        
+        # Add episode info to extras
+        info.update({
+            'episode_length': self.episode_length_buf.clone(),
+            'episode_reward': rewards.clone()  
+        })
         
         return obs, rewards, dones, info
     

@@ -16,8 +16,6 @@ sys.path.append('/home/ez/Documents/loco-mujoco')
 class LocoMujocoDataBridge:
     """
     Simple bridge to load LocoMujoco trajectory data for Genesis
-    
-    Implementation approach: Start simple, add complexity incrementally
     """
     
     def __init__(self, genesis_skeleton_env):
@@ -25,7 +23,7 @@ class LocoMujocoDataBridge:
         Initialize data bridge
         
         Args:
-            genesis_skeleton_env: Your SkeletonHumanoidEnv instance
+            genesis_skeleton_env: SkeletonHumanoidEnv instance
         """
         self.genesis_env = genesis_skeleton_env
         self.device = genesis_skeleton_env.device
