@@ -74,6 +74,8 @@ class RasterizerContext:
         self.scene = scene
         self.sim = scene.sim
         self.visualizer = scene.visualizer
+
+        # Update visuals at this point avoids nasty visual artifacts during Scene build
         self.visualizer.update_visual_states()
 
         if self.rendered_envs_idx is None:
@@ -489,7 +491,8 @@ class RasterizerContext:
         if self.sim.mpm_solver.is_active():
             idx = self.rendered_envs_idx[0]
             particles_all = self.sim.mpm_solver.particles_render.pos.to_numpy()[:, idx]
-            active_all = self.sim.mpm_solver.particles_render.active.to_numpy(dtype=np.bool_)[:, idx]
+            active_all = self.sim.mpm_solver.particles_render.active.to_numpy(dtype=gs.np_bool)[:, idx]
+            active_all = active_all.astype(dtype=np.bool_, copy=False)
             vverts_all = self.sim.mpm_solver.vverts_render.pos.to_numpy()[:, idx, :]
 
             for mpm_entity in self.sim.mpm_solver.entities:
@@ -554,7 +557,8 @@ class RasterizerContext:
         if self.sim.sph_solver.is_active():
             idx = self.rendered_envs_idx[0]
             particles_all = self.sim.sph_solver.particles_render.pos.to_numpy()[:, idx]
-            active_all = self.sim.sph_solver.particles_render.active.to_numpy(dtype=np.bool_)[:, idx]
+            active_all = self.sim.sph_solver.particles_render.active.to_numpy(dtype=gs.np_bool)[:, idx]
+            active_all = active_all.astype(dtype=np.bool_, copy=False)
 
             for sph_entity in self.sim.sph_solver.entities:
                 if sph_entity.surface.vis_mode == "recon":
@@ -630,7 +634,8 @@ class RasterizerContext:
             idx = self.rendered_envs_idx[0]
             particles_all = self.sim.pbd_solver.particles_render.pos.to_numpy()[:, idx]
             particles_vel_all = self.sim.pbd_solver.particles_render.vel.to_numpy()[:, idx]
-            active_all = self.sim.pbd_solver.particles_render.active.to_numpy(dtype=np.bool_)[:, idx]
+            active_all = self.sim.pbd_solver.particles_render.active.to_numpy(dtype=gs.np_bool)[:, idx]
+            active_all = active_all.astype(dtype=np.bool_, copy=False)
             vverts_all = self.sim.pbd_solver.vverts_render.pos.to_numpy()[:, idx]
 
             for pbd_entity in self.sim.pbd_solver.entities:
