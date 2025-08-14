@@ -1,9 +1,19 @@
 """
-Full-Scale Walking Training with Visualization
+Full-Scale Walking Training with Visualization - UPDATED
 
+Updated to work with refactored skeleton environment, data bridge, and AMP integration.
 Scale up the imitation learning training to get a walking agent.
 Includes visualization, monitoring, and model saving.
+
+DEPRECATED: Use comprehensive_imitation_trainer.py instead
+This file is kept for reference only.
 """
+
+# DEPRECATED: Use comprehensive_imitation_trainer.py instead
+print("⚠️  DEPRECATED: This script has been superseded by comprehensive_imitation_trainer.py")
+print("   Please use: python comprehensive_imitation_trainer.py")
+print("   The new script supports multiple behaviors and improved training.")
+input("Press Enter to continue with deprecated script or Ctrl+C to exit...")
 
 import torch
 import numpy as np

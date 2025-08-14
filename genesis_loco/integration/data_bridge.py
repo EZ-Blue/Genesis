@@ -19,6 +19,7 @@ class LocoMujocoDataBridge:
     Simple, efficient bridge for LocoMujoco trajectory data with Genesis
     
     Compatible with skeleton_humanoid_refactored.py environment.
+    Implements trajectory segmentation for AMP training.
     """
     
     def __init__(self, genesis_skeleton_env):
@@ -37,6 +38,11 @@ class LocoMujocoDataBridge:
         
         # Trajectory data
         self.loco_trajectory = None
+        
+        # Trajectory segmentation parameters
+        self.segment_length = 300  # 3 seconds at 100Hz (covers full gait cycle)
+        self.segment_overlap = 50  # 0.5 second overlap between segments
+        self.segments = []  # Cached segmented trajectories
         
     def load_trajectory(self, dataset_name: str = "walk"):
         """
@@ -66,7 +72,11 @@ class LocoMujocoDataBridge:
             # Validate compatibility
             self._validate_trajectory()
             
+            # Create trajectory segments for AMP training
+            self._create_segments()
+            
             print(f"✅ Trajectory loaded: {self.loco_trajectory.data.qpos.shape[0]} timesteps")
+            print(f"✅ Created {len(self.segments)} trajectory segments for training")
             return True
             
         except Exception as e:
@@ -94,9 +104,52 @@ class LocoMujocoDataBridge:
         if len(matched) < len(loco_joints) * 0.8:
             print("⚠️  Warning: Low joint match rate - some trajectory data may be ignored")
     
+    def _create_segments(self):
+        """Create trajectory segments with root position normalization"""
+        if self.loco_trajectory is None:
+            return
+        
+        traj = self.loco_trajectory
+        total_length = traj.data.qpos.shape[0]
+        
+        # Clear existing segments
+        self.segments = []
+        
+        # Create overlapping segments
+        segment_start = 0
+        while segment_start + self.segment_length <= total_length:
+            segment_end = segment_start + self.segment_length
+            
+            # Extract segment data and make writable copies
+            segment_qpos = np.array(traj.data.qpos[segment_start:segment_end])
+            segment_qvel = np.array(traj.data.qvel[segment_start:segment_end])
+            
+            # Normalize root position: subtract initial position, keep at origin
+            initial_root_pos = segment_qpos[0, :3].copy()
+            segment_qpos[:, :3] -= initial_root_pos  # All root positions relative to start
+            segment_qpos[0, :3] = [0.0, 0.0, 0.975]  # Start at Genesis default height
+            
+            # Store segment
+            segment_info = {
+                'qpos': segment_qpos,
+                'qvel': segment_qvel,
+                'start_idx': segment_start,
+                'end_idx': segment_end,
+                'length': self.segment_length,
+                'joint_names': traj.info.joint_names
+            }
+            
+            self.segments.append(segment_info)
+            
+            # Move to next segment with overlap
+            segment_start += (self.segment_length - self.segment_overlap)
+        
+        print(f"   Created segments: {len(self.segments)} segments of {self.segment_length} timesteps each")
+    
     def get_trajectory_state(self, timestep: int):
         """
         Get trajectory state at specific timestep formatted for Genesis
+        Uses segmented trajectory data with normalized root positions.
         
         Args:
             timestep: Trajectory timestep index
@@ -104,17 +157,26 @@ class LocoMujocoDataBridge:
         Returns:
             dict: State data formatted for Genesis environment
         """
-        if self.loco_trajectory is None:
+        if not self.segments:
             return None
-            
-        traj = self.loco_trajectory
         
-        # Extract state at timestep
-        qpos = traj.data.qpos[timestep]
-        qvel = traj.data.qvel[timestep]
+        # Use segments instead of raw trajectory
+        # Map global timestep to segment and local timestep
+        segment_idx = min(timestep // (self.segment_length - self.segment_overlap), len(self.segments) - 1)
+        local_timestep = timestep % self.segment_length
+        
+        # Clamp to valid range
+        if local_timestep >= self.segments[segment_idx]['length']:
+            local_timestep = self.segments[segment_idx]['length'] - 1
+        
+        segment = self.segments[segment_idx]
+        
+        # Extract state from segment (already normalized)
+        qpos = segment['qpos'][local_timestep]
+        qvel = segment['qvel'][local_timestep]
         
         # Convert to Genesis format
-        genesis_state = self._convert_state_to_genesis(qpos, qvel, traj.info.joint_names)
+        genesis_state = self._convert_state_to_genesis(qpos, qvel, segment['joint_names'])
         
         return genesis_state
     

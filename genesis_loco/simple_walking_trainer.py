@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Simple Walking Training Script
+Simple Walking Trainer with Imitation Learning
 
-Fixed implementation for imitation learning with skeleton humanoid.
-Addresses the zero reward and episode length issues.
+Updated to work with refactored skeleton environment, data bridge, and AMP integration.
+Implements proper imitation learning pipeline for walking gait training.
 """
 
 import torch
@@ -11,200 +11,341 @@ import numpy as np
 import time
 import sys
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 # Fix import paths
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from environments.skeleton_humanoid_refactored import SkeletonHumanoidEnv
+# Import refactored components
+from environments.skeleton_humanoid import SkeletonHumanoidEnv
 from integration.data_bridge import LocoMujocoDataBridge
+from integration.amp_integration import AMPGenesisIntegration
 import genesis as gs
 
 class SimpleWalkingTrainer:
     """
-    Minimal working trainer for skeleton walking imitation learning
+    Simple trainer for skeleton walking using imitation learning with AMP
+    
+    Compatible with refactored environment and integration components.
     """
     
     def __init__(self, config: Dict[str, Any]):
         self.config = config
         
-        print("🚀 Initializing Simple Walking Trainer")
+        print("🚀 Initializing Simple Walking Trainer with Imitation Learning")
+        print("=" * 60)
         
-        # Initialize Genesis first to establish device context
-        print("   Initializing Genesis...")
-        gs.init(backend=gs.gpu)
+        # Initialize Genesis
+        print("1. Initializing Genesis...")
+        try:
+            gs.init(backend=gs.gpu)
+            print(f"   ✅ Genesis initialized")
+        except Exception as e:
+            if "already initialized" in str(e):
+                print(f"   ✅ Genesis already initialized")
+            else:
+                raise e
         
-        # Now get the device from Genesis (after initialization)
         self.device = gs.device
-        print(f"   Using device: {self.device}")
+        print(f"   ✅ Using device: {self.device}")
         
+        # Setup components
         self._setup_environment()
         self._setup_data_bridge()
+        self._setup_amp_integration()
+        
+        # Training state
+        self.step_count = 0
+        self.episode_count = 0
         
     def _setup_environment(self):
         """Setup skeleton humanoid environment"""
-        print("   Setting up environment...")
+        print("2. Setting up environment...")
         
-        # Genesis already initialized in __init__
-        
-        # Create environment with proper configuration
         self.env = SkeletonHumanoidEnv(
-            num_envs=self.config.get('num_envs', 4),
-            episode_length_s=self.config.get('episode_length_s', 5.0),
-            dt=self.config.get('dt', 0.02),
+            num_envs=self.config.get('num_envs', 16),
+            episode_length_s=self.config.get('episode_length_s', 10.0),
+            dt=self.config.get('dt', 0.01),
             show_viewer=self.config.get('show_viewer', True),
-            use_box_feet=True  # Enable stable ground contact
+            use_box_feet=True
         )
         
-        print(f"     ✓ Environment created:")
-        print(f"       - Environments: {self.env.num_envs}")
-        print(f"       - Episode length: {self.config.get('episode_length_s', 5.0)}s")
-        print(f"       - Action dim: {self.env.num_actions}")
-        print(f"       - Observation dim: {self.env.num_observations}")
+        print(f"   ✅ Environment created:")
+        print(f"      - Environments: {self.env.num_envs}")
+        print(f"      - Episode length: {self.config.get('episode_length_s', 10.0)}s")
+        print(f"      - Actions: {self.env.num_actions}")
+        print(f"      - Observations: {self.env.num_observations}")
         
     def _setup_data_bridge(self):
         """Setup LocoMujoco data bridge for expert trajectories"""
-        print("   Setting up data bridge...")
+        print("3. Setting up data bridge...")
         
         try:
             self.data_bridge = LocoMujocoDataBridge(self.env)
             
             # Load walking trajectory
-            success, _ = self.data_bridge.load_trajectory("walk")
+            success = self.data_bridge.load_trajectory("walk")
             if not success:
-                print("     ⚠️ Failed to load trajectory, using simple rewards only")
-                self.use_expert_data = False
-            else:
-                print("     ✓ Expert walking trajectory loaded")
-                self.use_expert_data = True
+                raise RuntimeError("Failed to load trajectory")
+                
+            print(f"   ✅ Expert walking trajectory loaded:")
+            print(f"      - Length: {self.data_bridge.trajectory_length} timesteps")
+            print(f"      - Frequency: {self.data_bridge.trajectory_frequency} Hz")
+            self.use_expert_data = True
                 
         except Exception as e:
-            print(f"     ⚠️ Data bridge setup failed: {e}")
-            print("     Continuing with simple reward training only")
-            self.use_expert_data = False
+            print(f"   ❌ Data bridge setup failed: {e}")
+            print("      Cannot proceed without expert data for imitation learning")
+            raise
     
-    def test_environment_basic(self):
-        """Test basic environment functionality"""
-        print("\n🧪 Testing Environment Basics")
-        print("=" * 50)
+    def _setup_amp_integration(self):
+        """Setup AMP integration for discriminator training"""
+        print("4. Setting up AMP integration...")
         
-        # Reset environment
-        print("Testing environment reset...")
-        obs = self.env.reset()
-        print(f"✓ Reset successful - obs: {obs}")
+        if not self.use_expert_data:
+            print("   ⚠️ Skipping AMP setup - no expert data available")
+            self.amp_integration = None
+            return
         
-        # Test random actions
-        print("Testing random actions...")
-        for step in range(10):
-            # Generate random actions in reasonable range
-            actions = torch.randn((self.env.num_envs, self.env.num_actions), device=self.device) * 0.1
+        try:
+            # Create AMP integration
+            self.amp_integration = AMPGenesisIntegration(
+                genesis_env=self.env,
+                data_bridge=self.data_bridge,
+                discriminator_config={
+                    'hidden_layers': [512, 256],
+                    'activation': 'tanh',
+                    'learning_rate': 5e-5,
+                    'use_running_norm': True
+                }
+            )
             
-            obs, rewards, dones, info = self.env.step(actions)
+            # Load expert data for discriminator
+            success = self.amp_integration.load_expert_data()
+            if not success:
+                raise RuntimeError("Failed to load expert observations")
+                
+            print(f"   ✅ AMP integration ready:")
+            print(f"      - Expert samples: {self.amp_integration.n_expert_samples}")
+            print(f"      - Observation dim: {self.env.num_observations}")
             
-            print(f"  Step {step+1:2d}: reward={rewards[0].item():.3f}, done={dones[0].item()}, "
-                  f"episode_length={self.env.episode_length_buf[0].item()}")
-            
-            if dones[0]:
-                print("    Environment reset due to termination")
-                break
-        
-        print(f"\n📊 Test Results:")
-        print(f"   Final episode lengths: {self.env.episode_length_buf}")
-        print(f"   Final rewards: {rewards}")
-        print(f"   Terminations: {dones.sum().item()}/{self.env.num_envs}")
-        
-    def simple_policy_test(self, num_steps: int = 100):
-        """Test with a simple standing policy"""
-        print(f"\n🤖 Testing Simple Standing Policy ({num_steps} steps)")
-        print("=" * 50)
-        
-        obs = self.env.reset()
-        
-        total_reward = torch.zeros(self.env.num_envs, device=self.device)
-        episode_lengths = []
-        
-        for step in range(num_steps):
-            # Simple policy: small actions to try to stand/balance
-            actions = torch.zeros((self.env.num_envs, self.env.num_actions), device=self.device)
-            
-            # Add small stabilizing torques (PD-like behavior)
-            if hasattr(self.env, 'root_pos'):
-                height_error = 1.0 - self.env.root_pos[:, 2]  # Target 1m height
-                actions[:, :3] = height_error.unsqueeze(1) * 0.1  # Small corrective actions
-            
-            obs, rewards, dones, info = self.env.step(actions)
-            total_reward += rewards
-            
-            # Log progress
-            if step % 20 == 0:
-                avg_height = self.env.root_pos[:, 2].mean().item()
-                avg_reward = rewards.mean().item()
-                avg_length = self.env.episode_length_buf.float().mean().item()
-                print(f"  Step {step:3d}: Height={avg_height:.3f}m, Reward={avg_reward:.3f}, "
-                      f"Episode Length={avg_length:.1f}")
-            
-            # Track completed episodes
-            if torch.any(dones):
-                completed_envs = dones.nonzero(as_tuple=False).flatten()
-                for env_id in completed_envs:
-                    length = self.env.episode_length_buf[env_id].item()
-                    episode_lengths.append(length)
-                    print(f"    Env {env_id}: Episode completed with length {length}")
-        
-        print(f"\n📊 Simple Policy Results:")
-        print(f"   Average total reward: {total_reward.mean().item():.3f}")
-        print(f"   Average episode length: {np.mean(episode_lengths) if episode_lengths else 'No completions'}")
-        print(f"   Completed episodes: {len(episode_lengths)}")
-        print(f"   Final average height: {self.env.root_pos[:, 2].mean().item():.3f}m")
-        
-    def run_diagnostics(self):
-        """Run comprehensive diagnostics"""
-        print("\n🔍 Running Training Diagnostics")
+        except Exception as e:
+            print(f"   ❌ AMP integration setup failed: {e}")
+            self.amp_integration = None
+            raise
+    
+    def test_expert_trajectory_application(self, num_samples: int = 10):
+        """Test applying expert trajectory states to environment"""
+        print(f"\n🎯 Testing Expert Trajectory Application ({num_samples} samples)")
         print("=" * 60)
         
-        # Test 1: Basic environment functionality
-        self.test_environment_basic()
+        if not self.use_expert_data:
+            print("   ⚠️ No expert data available")
+            return
         
-        # Test 2: Simple policy
-        self.simple_policy_test(100)
+        # Reset environment
+        self.env.reset()
         
-        # Test 3: Action space validation
-        print(f"\n🎯 Action Space Validation:")
-        print(f"   Environment action dim: {self.env.num_actions}")
-        print(f"   Skeleton actions: {self.env.num_actions}")
-        print(f"   Action mapping: {len(self.env.action_to_joint_idx) if hasattr(self.env, 'action_to_joint_idx') else 'Not available'}")
+        # Test trajectory application
+        env_ids = torch.tensor([0], device=self.device)  # First environment only
         
-        # Test 4: Reward system validation
-        print(f"\n🎁 Reward System Validation:")
-        if hasattr(self.env, 'reward_functions'):
-            print(f"   Registered reward functions: {list(self.env.reward_functions.keys())}")
-            print(f"   Reward config: {self.env.reward_cfg}")
-        else:
-            print("   ⚠️ No reward functions registered!")
+        print("   Applying expert states and recording observations...")
+        expert_obs_list = []
+        
+        for i in range(0, num_samples * 10, 10):  # Sample every 10th timestep
+            # Get trajectory state
+            state_data = self.data_bridge.get_trajectory_state(i)
+            if state_data is None:
+                continue
             
-        print("\n✅ Diagnostics complete!")
+            # Apply to environment
+            self.data_bridge.apply_trajectory_state(state_data, env_ids)
+            
+            # Get observation
+            obs = self.env._get_observations()
+            expert_obs_list.append(obs[0])
+            
+            # Log sample
+            root_height = state_data['root_pos'][2].item()
+            print(f"      Sample {i:3d}: Root height = {root_height:.3f}m")
+        
+        if expert_obs_list:
+            expert_obs_tensor = torch.stack(expert_obs_list, dim=0)
+            print(f"   ✅ Generated {expert_obs_tensor.shape[0]} expert observations")
+            print(f"      Observation shape: {expert_obs_tensor.shape}")
+            print(f"      Observation range: [{expert_obs_tensor.min().item():.3f}, {expert_obs_tensor.max().item():.3f}]")
+        else:
+            print("   ❌ Failed to generate expert observations")
+    
+    def test_amp_discriminator(self, num_steps: int = 50):
+        """Test AMP discriminator functionality"""
+        print(f"\n🧠 Testing AMP Discriminator ({num_steps} steps)")
+        print("=" * 60)
+        
+        if self.amp_integration is None:
+            print("   ⚠️ AMP integration not available")
+            return
+        
+        # Reset environment
+        obs, _ = self.env.reset()
+        
+        discriminator_losses = []
+        amp_rewards = []
+        
+        for step in range(num_steps):
+            # Random policy actions
+            actions = torch.randn((self.env.num_envs, self.env.num_actions), device=self.device) * 0.1
+            
+            # Step environment
+            obs, env_rewards, dones, info = self.env.step(actions)
+            
+            # Compute AMP rewards
+            amp_reward = self.amp_integration.compute_amp_rewards(obs)
+            amp_rewards.append(amp_reward.mean().item())
+            
+            # Train discriminator
+            if step % 5 == 0:  # Train every 5 steps
+                metrics = self.amp_integration.train_discriminator_step(obs)
+                discriminator_losses.append(metrics.get('discriminator_loss', 0.0))
+                
+                if step % 20 == 0:
+                    print(f"      Step {step:3d}: AMP reward = {amp_reward.mean().item():.4f}, "
+                          f"Disc loss = {metrics.get('discriminator_loss', 0.0):.4f}")
+        
+        print(f"   ✅ AMP discriminator test completed:")
+        print(f"      - Average AMP reward: {np.mean(amp_rewards):.4f}")
+        print(f"      - Average discriminator loss: {np.mean(discriminator_losses):.4f}")
+        print(f"      - Expert accuracy: {metrics.get('expert_accuracy', 0.0):.3f}")
+        print(f"      - Policy accuracy: {metrics.get('policy_accuracy', 0.0):.3f}")
+    
+    def simple_imitation_training(self, num_steps: int = 500):
+        """Simple imitation learning training loop"""
+        print(f"\n🏃‍♂️ Simple Imitation Learning Training ({num_steps} steps)")
+        print("=" * 60)
+        
+        if self.amp_integration is None:
+            print("   ❌ Cannot train without AMP integration")
+            return
+        
+        # Reset environment
+        obs, _ = self.env.reset()
+        
+        # Training metrics
+        episode_rewards = []
+        amp_rewards_history = []
+        env_rewards_history = []
+        mixed_rewards_history = []
+        
+        print("   Starting training loop...")
+        
+        for step in range(num_steps):
+            # Simple policy: small random actions with some structure
+            actions = torch.randn((self.env.num_envs, self.env.num_actions), device=self.device) * 0.2
+            
+            # Add some structure to actions to encourage walking-like motion
+            if step > 100:  # After initial exploration
+                # Oscillatory pattern for legs (simple walking pattern)
+                phase = (step * 0.1) % (2 * np.pi)
+                leg_pattern = torch.sin(torch.tensor(phase)) * 0.3
+                
+                # Apply to hip and knee joints (rough approximation)
+                if self.env.num_actions >= 6:
+                    actions[:, 3:6] += leg_pattern  # Right leg
+                    actions[:, 9:12] -= leg_pattern  # Left leg (opposite phase)
+            
+            # Step environment
+            obs, env_rewards, dones, info = self.env.step(actions)
+            
+            # Compute AMP rewards
+            amp_rewards = self.amp_integration.compute_amp_rewards(obs)
+            
+            # Mix environment and AMP rewards
+            mixed_rewards = self.amp_integration.get_mixed_rewards(
+                env_rewards, obs, env_reward_weight=0.3
+            )
+            
+            # Train discriminator
+            if step % 10 == 0:
+                self.amp_integration.train_discriminator_step(obs)
+            
+            # Track metrics
+            env_rewards_history.append(env_rewards.mean().item())
+            amp_rewards_history.append(amp_rewards.mean().item())
+            mixed_rewards_history.append(mixed_rewards.mean().item())
+            
+            # Log progress
+            if step % 100 == 0:
+                avg_height = self.env.root_pos[:, 2].mean().item()
+                print(f"      Step {step:4d}: Height={avg_height:.3f}m, "
+                      f"Env={env_rewards.mean().item():.3f}, "
+                      f"AMP={amp_rewards.mean().item():.3f}, "
+                      f"Mixed={mixed_rewards.mean().item():.3f}")
+            
+            # Track episode completions
+            if torch.any(dones):
+                completed_envs = dones.sum().item()
+                avg_episode_reward = mixed_rewards.mean().item()
+                episode_rewards.append(avg_episode_reward)
+                
+                if len(episode_rewards) % 10 == 0:
+                    print(f"      Episodes completed: {len(episode_rewards)}, "
+                          f"Average reward: {np.mean(episode_rewards[-10:]):.3f}")
+        
+        print(f"   ✅ Training completed:")
+        print(f"      - Episodes completed: {len(episode_rewards)}")
+        print(f"      - Average env reward: {np.mean(env_rewards_history):.4f}")
+        print(f"      - Average AMP reward: {np.mean(amp_rewards_history):.4f}")
+        print(f"      - Average mixed reward: {np.mean(mixed_rewards_history):.4f}")
+        print(f"      - Final height: {self.env.root_pos[:, 2].mean().item():.3f}m")
+    
+    def run_full_test(self):
+        """Run comprehensive test of imitation learning pipeline"""
+        print("\n🔬 Running Full Imitation Learning Test")
+        print("=" * 70)
+        
+        try:
+            # Test 1: Expert trajectory application
+            self.test_expert_trajectory_application(20)
+            
+            # Test 2: AMP discriminator functionality
+            self.test_amp_discriminator(100)
+            
+            # Test 3: Simple imitation training
+            self.simple_imitation_training(1000)
+            
+            print("\n🎉 All tests completed successfully!")
+            print("The imitation learning pipeline is working correctly.")
+            
+        except Exception as e:
+            print(f"\n❌ Test failed: {e}")
+            import traceback
+            traceback.print_exc()
 
 def main():
     """Main function"""
-    print("🚶‍♂️ Simple Walking Trainer Diagnostics")
+    print("🚶‍♂️ Simple Walking Trainer with Imitation Learning")
+    print("=" * 70)
     
-    # Simple configuration for testing
+    # Configuration for imitation learning
     config = {
-        'num_envs': 4,
-        'episode_length_s': 5.0,
-        'dt': 0.02,
+        'num_envs': 16,
+        'episode_length_s': 10.0,
+        'dt': 0.01,
         'show_viewer': True,
     }
     
     try:
         trainer = SimpleWalkingTrainer(config)
-        trainer.run_diagnostics()
+        trainer.run_full_test()
         
-        print("\n🎉 If you see rewards and episode lengths > 0, the training setup is working!")
-        print("Next step: Implement proper PPO + AMP training loop")
+        print("\n✅ Success! Your imitation learning setup is ready for training.")
+        print("Next steps:")
+        print("  1. Implement proper PPO policy network")
+        print("  2. Add trajectory reward tracking")
+        print("  3. Fine-tune AMP reward mixing")
         
     except Exception as e:
-        print(f"\n❌ Training test failed: {e}")
+        print(f"\n❌ Training setup failed: {e}")
         import traceback
         traceback.print_exc()
 

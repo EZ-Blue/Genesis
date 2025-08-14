@@ -92,7 +92,7 @@ class SkeletonPolicyNetwork(nn.Module):
         
         # Actor head (policy)
         self.actor_mean = nn.Linear(prev_dim, action_dim)
-        self.actor_logstd = nn.Parameter(torch.zeros(action_dim))  # Learnable log std
+        self.actor_logstd = nn.Parameter(torch.ones(action_dim) * -1.0)  # Start with std=0.37 for better exploration
         
         # Critic head (value function)
         self.critic = nn.Linear(prev_dim, 1)
@@ -107,8 +107,8 @@ class SkeletonPolicyNetwork(nn.Module):
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
         
-        # Small initialization for actor head
-        nn.init.xavier_uniform_(self.actor_mean.weight, gain=0.01)
+        # Proper initialization for locomotion actions
+        nn.init.xavier_uniform_(self.actor_mean.weight, gain=0.1)
         nn.init.zeros_(self.actor_mean.bias)
     
     def forward(self, obs: torch.Tensor, update_obs_stats: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:

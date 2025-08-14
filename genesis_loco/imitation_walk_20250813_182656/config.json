@@ -1,0 +1,38 @@
+{
+  "num_envs": 128,
+  "episode_length_s": 15.0,
+  "dt": 0.01,
+  "show_viewer": false,
+  "use_box_feet": true,
+  "max_episode_steps": 750,
+  "env_reward_weight": 0.1,
+  "gamma": 0.99,
+  "gae_lambda": 0.95,
+  "update_epochs": 4,
+  "num_minibatches": 8,
+  "log_interval": 10,
+  "checkpoint_interval": 100,
+  "metrics_window": 100,
+  "policy": {
+    "hidden_layers": [
+      512,
+      256
+    ],
+    "activation": "tanh",
+    "learning_rate": 6e-05,
+    "clip_epsilon": 0.1,
+    "value_coeff": 0.5,
+    "entropy_coeff": 0.0,
+    "use_obs_norm": true,
+    "max_grad_norm": 0.75
+  },
+  "discriminator": {
+    "hidden_layers": [
+      512,
+      256
+    ],
+    "activation": "tanh",
+    "learning_rate": 5e-05,
+    "use_running_norm": true
+  }
+}

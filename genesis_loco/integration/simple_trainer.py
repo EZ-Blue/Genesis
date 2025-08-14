@@ -132,11 +132,17 @@ class SimpleImitationTrainer:
         print("   Setting up Genesis environment...")
         
         import genesis as gs
-        gs.init(backend=gs.gpu)
+        
+        # Initialize Genesis if not already done
+        try:
+            gs.init(backend=gs.gpu)
+        except Exception as e:
+            if "already initialized" not in str(e):
+                raise e
         
         # Import skeleton environment
         sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from environments.skeleton_humanoid_refactored import SkeletonHumanoidEnv
+        from environments.skeleton_humanoid import SkeletonHumanoidEnv
         
         self.env = SkeletonHumanoidEnv(
             num_envs=self.config['num_envs'],
@@ -160,13 +166,9 @@ class SimpleImitationTrainer:
         self.data_bridge = LocoMujocoDataBridge(self.env)
         
         # Load expert trajectory
-        success, _ = self.data_bridge.load_trajectory("walk")
+        success = self.data_bridge.load_trajectory("walk")
         if not success:
             raise RuntimeError("Failed to load expert trajectory")
-        
-        success, _ = self.data_bridge.build_joint_mapping()
-        if not success:
-            raise RuntimeError("Failed to build joint mapping")
         
         # Create AMP integration
         self.amp_integration = AMPGenesisIntegration(

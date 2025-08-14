@@ -93,12 +93,21 @@ class SkeletonHumanoidEnv:
         print(f"   - Episode length: {self.episode_length_s}s")
     
     def _get_reward_config(self) -> Dict[str, Any]:
-        """Reward configuration for skeleton locomotion (from current implementation)"""
+        """Reward configuration for skeleton locomotion (LocoMujoco inspired)"""
         return {
-            "trajectory_tracking": 1.0,
-            "upright_orientation": 0.2,
-            "energy_efficiency": -0.01,
-            "root_height": 0.1,
+            # Task-specific rewards (goal rewards)
+            "forward_motion": 1.0,        # Primary walking objective
+            "balance_stability": 0.5,     # Prevent falling sideways/backward
+            "upright_orientation": 0.3,   # Stay upright
+            "root_height": 0.2,          # Maintain proper height
+            "foot_contact": 0.2,         # Proper ground contact
+            
+            # Regularization rewards
+            "joint_limits": 0.1,         # Prevent extreme poses
+            "energy_efficiency": -0.01,  # Minimize effort
+            
+            # Optional trajectory tracking (if using expert trajectories)
+            "trajectory_tracking": 0.0,  # Disabled by default for pure RL
         }
 
     def _init_genesis_scene(self, show_viewer: bool = False):
@@ -331,17 +340,33 @@ class SkeletonHumanoidEnv:
         
         return obs, self.rew_buf, self.reset_buf, self.extras
 
+    # def _apply_actions(self, actions: torch.Tensor):
+    #     """Apply torque actions directly to joints using simplified DOF mapping"""
+    #     
+    #     # Apply actions directly to the motors using pre-computed DOF indices
+    #     self.robot.control_dofs_force(actions, dofs_idx_local=self.motors_dof_idx)
+    #     
+    #     # Track energy consumption
+    #     if hasattr(self, 'dof_vel') and hasattr(self, 'energy_consumption'):
+    #         # Get velocities for controlled DOFs only
+    #         controlled_dof_vel = self.dof_vel[:, self.motors_dof_idx]
+    #         power = torch.sum(torch.abs(actions * controlled_dof_vel), dim=1)
+    #         self.energy_consumption += power * self.dt
+
     def _apply_actions(self, actions: torch.Tensor):
-        """Apply torque actions directly to joints using simplified DOF mapping"""
+        """Apply position control actions to joints using PD control"""
         
+        # Actions represent target joint positions for PD control
         # Apply actions directly to the motors using pre-computed DOF indices
-        self.robot.control_dofs_force(actions, dofs_idx_local=self.motors_dof_idx)
+        self.robot.control_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
         
-        # Track energy consumption
+        # Track energy consumption (approximate for position control)
         if hasattr(self, 'dof_vel') and hasattr(self, 'energy_consumption'):
             # Get velocities for controlled DOFs only
             controlled_dof_vel = self.dof_vel[:, self.motors_dof_idx]
-            power = torch.sum(torch.abs(actions * controlled_dof_vel), dim=1)
+            # Estimate power from position error and velocity
+            position_error = actions - self.dof_pos[:, self.motors_dof_idx]
+            power = torch.sum(torch.abs(position_error * controlled_dof_vel), dim=1)
             self.energy_consumption += power * self.dt
 
     def _update_robot_state(self):
@@ -528,6 +553,34 @@ class SkeletonHumanoidEnv:
         """Reward proper standing height"""
         height_error = torch.abs(self.root_pos[:, 2] - 1.0)
         return torch.exp(-height_error * 5.0)
+    
+    def _reward_forward_motion(self) -> torch.Tensor:
+        """Reward forward motion (key for walking)"""
+        forward_vel = self.root_lin_vel[:, 0]  # X-axis velocity
+        return torch.clamp(forward_vel, min=0.0, max=2.0)  # Reward 0-2 m/s forward
+    
+    def _reward_balance_stability(self) -> torch.Tensor:
+        """Penalize excessive lateral/vertical velocity (prevents falling)"""
+        lateral_vel = torch.abs(self.root_lin_vel[:, 1])  # Y-axis
+        vertical_vel = torch.abs(self.root_lin_vel[:, 2])  # Z-axis
+        stability_penalty = lateral_vel + vertical_vel * 2.0  # Penalize vertical motion more
+        return torch.exp(-stability_penalty * 3.0)
+    
+    def _reward_foot_contact(self) -> torch.Tensor:
+        """Reward proper foot contact (prevents bouncing/falling)"""
+        # Simple approximation: penalize if robot is too high (no ground contact)
+        ground_contact_reward = torch.where(
+            self.root_pos[:, 2] < 1.2,  # Normal standing height range
+            torch.ones_like(self.root_pos[:, 2]),
+            torch.zeros_like(self.root_pos[:, 2])
+        )
+        return ground_contact_reward
+    
+    def _reward_joint_limits(self) -> torch.Tensor:
+        """Penalize extreme joint positions"""
+        # Penalize joints near limits (rough approximation)
+        joint_penalty = torch.sum(torch.abs(self.dof_pos[:, self.motors_dof_idx]), dim=1)
+        return torch.exp(-joint_penalty * 0.1)
 
     def _reward_trajectory_tracking(self) -> torch.Tensor:
         """Reward for tracking trajectory (from base env)"""
