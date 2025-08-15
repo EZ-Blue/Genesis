@@ -5,12 +5,27 @@ Comprehensive Imitation Learning Trainer
 A complete, efficient training system for Genesis skeleton humanoid imitation learning.
 Supports multiple behaviors (walking, running, squatting) with AMP discriminator training.
 
+NEW: BVH Integration Support
+- Custom NPZ trajectory files from BVH preprocessing
+- Interactive file selection for custom motions
+- Full compatibility with BVH preprocessing pipeline
+
+BVH Workflow:
+1. Preprocess BVH: /home/choonspin/intuitive_autonomy/loco-mujoco/preprocess_scripts/bvh_general_pipeline.py
+2. Train with NPZ: Select option 4 (custom) in this trainer
+3. Test integration: test_bvh_integration.py
+
 Compatible with refactored components:
 - skeleton_humanoid.py (SkeletonHumanoidEnv)
-- data_bridge.py (LocoMujocoDataBridge) 
+- data_bridge.py (LocoMujocoDataBridge) - Enhanced with NPZ support
 - amp_integration.py (AMPGenesisIntegration)
 - amp_discriminator.py (AMPDiscriminator, AMPTrainer)
 """
+
+# Fix Qt/OpenCV display issues
+import os
+os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+os.environ['MPLBACKEND'] = 'Agg'
 
 import torch
 import numpy as np
@@ -19,6 +34,8 @@ import os
 import sys
 from datetime import datetime
 from typing import Dict, List, Tuple, Optional
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 from collections import deque
 import json
@@ -758,23 +775,37 @@ def main():
     print("=" * 70)
     
     # Behavior selection
-    print("Available behaviors:")
-    print("1. walk - Natural human walking")
-    print("2. run - Running/jogging motion") 
-    print("3. squat - Squatting exercise")
+    print("Available options:")
+    print("1. walk - Natural human walking (LocoMujoco)")
+    print("2. run - Running/jogging motion (LocoMujoco)") 
+    print("3. squat - Squatting exercise (LocoMujoco)")
+    print("4. custom - Load custom NPZ trajectory file (preprocessed BVH)")
     
-    choice = input("Select behavior (1/2/3 or walk/run/squat): ").strip().lower()
+    choice = input("Select option (1/2/3/4 or walk/run/squat/custom): ").strip().lower()
     
-    behavior_map = {"1": "walk", "2": "run", "3": "squat"}
+    behavior_map = {"1": "walk", "2": "run", "3": "squat", "4": "custom"}
     if choice in behavior_map:
         behavior = behavior_map[choice]
-    elif choice in ["walk", "run", "squat"]:
+    elif choice in ["walk", "run", "squat", "custom"]:
         behavior = choice
     else:
         print("Invalid choice, defaulting to 'walk'")
         behavior = "walk"
     
-    print(f"\n🎯 Selected behavior: {behavior.upper()}")
+    # Handle custom NPZ file
+    if behavior == "custom":
+        npz_path = input("Enter path to NPZ trajectory file: ").strip()
+        if not npz_path.endswith('.npz'):
+            npz_path += '.npz'
+        if not os.path.exists(npz_path):
+            print(f"❌ File not found: {npz_path}")
+            print("Defaulting to 'walk' behavior")
+            behavior = "walk"
+        else:
+            behavior = npz_path
+            print(f"🎯 Selected custom trajectory: {npz_path}")
+    else:
+        print(f"\n🎯 Selected behavior: {behavior.upper()}")
     
     # Training configuration
     print("\nTraining scale:")

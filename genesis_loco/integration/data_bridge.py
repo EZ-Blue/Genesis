@@ -3,6 +3,16 @@ Refactored LocoMujoco Data Bridge - Simple and Efficient
 
 Clean, minimal implementation that works with the refactored skeleton environment.
 Uses direct joint mapping without complex motor detection.
+
+ENHANCED: BVH Integration Support
+- Direct NPZ trajectory file loading
+- Preprocessed BVH data compatibility  
+- Automatic file vs behavior detection
+
+BVH Preprocessing Dependency:
+- Location: /home/choonspin/intuitive_autonomy/loco-mujoco/preprocess_scripts/bvh_general_pipeline.py
+- Usage: python bvh_general_pipeline.py --input motion.bvh --output motion.npz
+- Result: NPZ files can be loaded directly by this bridge
 """
 
 import torch
@@ -46,15 +56,19 @@ class LocoMujocoDataBridge:
         
     def load_trajectory(self, dataset_name: str = "walk"):
         """
-        Load LocoMujoco trajectory using proven pipeline
+        Load LocoMujoco trajectory using proven pipeline or NPZ file
         
         Args:
-            dataset_name: Dataset to load (e.g., "walk", "run")
+            dataset_name: Dataset to load (e.g., "walk", "run") or path to NPZ file
             
         Returns:
             bool: Success status
         """
-        print(f"Loading LocoMujoco trajectory '{dataset_name}'...")
+        print(f"Loading trajectory '{dataset_name}'...")
+        
+        # Check if it's a file path to NPZ trajectory
+        if dataset_name.endswith('.npz') or os.path.exists(dataset_name):
+            return self._load_npz_trajectory(dataset_name)
         
         try:
             # Import LocoMujoco components
@@ -81,6 +95,40 @@ class LocoMujocoDataBridge:
             
         except Exception as e:
             print(f"❌ Failed to load trajectory: {e}")
+            return False
+    
+    def _load_npz_trajectory(self, npz_path: str):
+        """
+        Load trajectory from NPZ file (preprocessed BVH data)
+        
+        Args:
+            npz_path: Path to NPZ trajectory file
+            
+        Returns:
+            bool: Success status
+        """
+        print(f"Loading NPZ trajectory file: {npz_path}")
+        
+        try:
+            from loco_mujoco.trajectory import Trajectory
+            
+            # Load trajectory from NPZ file
+            self.loco_trajectory = Trajectory.load(npz_path)
+            
+            # Validate compatibility
+            self._validate_trajectory()
+            
+            # Create trajectory segments for AMP training
+            self._create_segments()
+            
+            print(f"✅ NPZ trajectory loaded: {self.loco_trajectory.data.qpos.shape[0]} timesteps")
+            print(f"✅ Created {len(self.segments)} trajectory segments for training")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to load NPZ trajectory: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def _validate_trajectory(self):
