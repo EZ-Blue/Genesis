@@ -143,10 +143,10 @@ class SkeletonHumanoidEnv:
         """Load skeleton robot into scene (from current implementation)"""
         # Select robot file based on box_feet setting (exact same logic)
         if self.use_box_feet:
-            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
+            robot_file = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
             print(f"Using LocoMujoco-style box feet for stable ground contact")
         else:
-            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/revised_genesis_skeleton.xml"
+            robot_file = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/skeleton/revised_genesis_skeleton.xml"
             print(f"Using standard foot collision meshes")
         
         # Load robot (from base env)
