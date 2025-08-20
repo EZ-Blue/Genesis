@@ -92,7 +92,7 @@ class SkeletonPolicyNetwork(nn.Module):
         
         # Actor head (policy)
         self.actor_mean = nn.Linear(prev_dim, action_dim)
-        self.actor_logstd = nn.Parameter(torch.ones(action_dim) * -1.0)  # Start with std=0.37 for better exploration
+        self.actor_logstd = nn.Parameter(torch.ones(action_dim) * -2.0)  # Reduced std=0.135 for position control
         
         # Critic head (value function)
         self.critic = nn.Linear(prev_dim, 1)
@@ -101,15 +101,16 @@ class SkeletonPolicyNetwork(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize network weights"""
+        """Initialize network weights for locomotion"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight)
+                if module == self.actor_mean:
+                    # Small initialization for policy output (better for position control)
+                    nn.init.xavier_uniform_(module.weight, gain=0.01)
+                else:
+                    # Standard initialization for other layers
+                    nn.init.xavier_uniform_(module.weight, gain=1.0)
                 nn.init.zeros_(module.bias)
-        
-        # Proper initialization for locomotion actions
-        nn.init.xavier_uniform_(self.actor_mean.weight, gain=0.1)
-        nn.init.zeros_(self.actor_mean.bias)
     
     def forward(self, obs: torch.Tensor, update_obs_stats: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -195,7 +196,7 @@ class PPOTrainer:
     def __init__(self,
                  policy: SkeletonPolicyNetwork,
                  learning_rate: float = 3e-4,
-                 clip_epsilon: float = 0.2,
+                 clip_epsilon: float = 0.2,  
                  value_coeff: float = 0.5,
                  entropy_coeff: float = 0.01,
                  max_grad_norm: float = 0.5,

@@ -1,0 +1,39 @@
+{
+  "num_envs": 256,
+  "episode_length_s": 30.0,
+  "dt": 0.01,
+  "show_viewer": false,
+  "use_box_feet": true,
+  "obs_history_length": 3,
+  "max_episode_steps": 600,
+  "env_reward_weight": 0.5,
+  "gamma": 0.99,
+  "gae_lambda": 0.95,
+  "update_epochs": 4,
+  "num_minibatches": 8,
+  "log_interval": 10,
+  "checkpoint_interval": 100,
+  "metrics_window": 100,
+  "policy": {
+    "hidden_layers": [
+      512,
+      256
+    ],
+    "activation": "tanh",
+    "learning_rate": 6e-05,
+    "clip_epsilon": 0.1,
+    "value_coeff": 0.5,
+    "entropy_coeff": 0.0,
+    "use_obs_norm": true,
+    "max_grad_norm": 0.75
+  },
+  "discriminator": {
+    "hidden_layers": [
+      256,
+      128
+    ],
+    "activation": "tanh",
+    "learning_rate": 2e-06,
+    "use_running_norm": true
+  }
+}

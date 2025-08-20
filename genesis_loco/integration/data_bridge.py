@@ -73,10 +73,10 @@ class LocoMujocoDataBridge:
             self._validate_trajectory()
             
             # Create trajectory segments for AMP training
-            self._create_segments()
+            # self._create_segments()  # DISABLED: Using raw trajectory data instead
             
             print(f"✅ Trajectory loaded: {self.loco_trajectory.data.qpos.shape[0]} timesteps")
-            print(f"✅ Created {len(self.segments)} trajectory segments for training")
+            # print(f"✅ Created {len(self.segments)} trajectory segments for training")  # DISABLED
             return True
             
         except Exception as e:
@@ -104,52 +104,52 @@ class LocoMujocoDataBridge:
         if len(matched) < len(loco_joints) * 0.8:
             print("⚠️  Warning: Low joint match rate - some trajectory data may be ignored")
     
-    def _create_segments(self):
-        """Create trajectory segments with root position normalization"""
-        if self.loco_trajectory is None:
-            return
-        
-        traj = self.loco_trajectory
-        total_length = traj.data.qpos.shape[0]
-        
-        # Clear existing segments
-        self.segments = []
-        
-        # Create overlapping segments
-        segment_start = 0
-        while segment_start + self.segment_length <= total_length:
-            segment_end = segment_start + self.segment_length
-            
-            # Extract segment data and make writable copies
-            segment_qpos = np.array(traj.data.qpos[segment_start:segment_end])
-            segment_qvel = np.array(traj.data.qvel[segment_start:segment_end])
-            
-            # Normalize root position: subtract initial position, keep at origin
-            initial_root_pos = segment_qpos[0, :3].copy()
-            segment_qpos[:, :3] -= initial_root_pos  # All root positions relative to start
-            segment_qpos[0, :3] = [0.0, 0.0, 0.975]  # Start at Genesis default height
-            
-            # Store segment
-            segment_info = {
-                'qpos': segment_qpos,
-                'qvel': segment_qvel,
-                'start_idx': segment_start,
-                'end_idx': segment_end,
-                'length': self.segment_length,
-                'joint_names': traj.info.joint_names
-            }
-            
-            self.segments.append(segment_info)
-            
-            # Move to next segment with overlap
-            segment_start += (self.segment_length - self.segment_overlap)
-        
-        print(f"   Created segments: {len(self.segments)} segments of {self.segment_length} timesteps each")
+    # def _create_segments(self):
+    #     """Create trajectory segments with root position normalization"""
+    #     if self.loco_trajectory is None:
+    #         return
+    #     
+    #     traj = self.loco_trajectory
+    #     total_length = traj.data.qpos.shape[0]
+    #     
+    #     # Clear existing segments
+    #     self.segments = []
+    #     
+    #     # Create overlapping segments
+    #     segment_start = 0
+    #     while segment_start + self.segment_length <= total_length:
+    #         segment_end = segment_start + self.segment_length
+    #         
+    #         # Extract segment data and make writable copies
+    #         segment_qpos = np.array(traj.data.qpos[segment_start:segment_end])
+    #         segment_qvel = np.array(traj.data.qvel[segment_start:segment_end])
+    #         
+    #         # Normalize root position: subtract initial position, keep at origin
+    #         initial_root_pos = segment_qpos[0, :3].copy()
+    #         segment_qpos[:, :3] -= initial_root_pos  # All root positions relative to start
+    #         segment_qpos[0, :3] = [0.0, 0.0, 0.975]  # Start at Genesis default height
+    #         
+    #         # Store segment
+    #         segment_info = {
+    #             'qpos': segment_qpos,
+    #             'qvel': segment_qvel,
+    #             'start_idx': segment_start,
+    #             'end_idx': segment_end,
+    #             'length': self.segment_length,
+    #             'joint_names': traj.info.joint_names
+    #         }
+    #         
+    #         self.segments.append(segment_info)
+    #         
+    #         # Move to next segment with overlap
+    #         segment_start += (self.segment_length - self.segment_overlap)
+    #     
+    #     print(f"   Created segments: {len(self.segments)} segments of {self.segment_length} timesteps each")  # DISABLED: Using raw trajectory data
     
     def get_trajectory_state(self, timestep: int):
         """
         Get trajectory state at specific timestep formatted for Genesis
-        Uses segmented trajectory data with normalized root positions.
+        Uses raw trajectory data without segmentation.
         
         Args:
             timestep: Trajectory timestep index
@@ -157,26 +157,21 @@ class LocoMujocoDataBridge:
         Returns:
             dict: State data formatted for Genesis environment
         """
-        if not self.segments:
+        if self.loco_trajectory is None:
             return None
         
-        # Use segments instead of raw trajectory
-        # Map global timestep to segment and local timestep
-        segment_idx = min(timestep // (self.segment_length - self.segment_overlap), len(self.segments) - 1)
-        local_timestep = timestep % self.segment_length
+        traj = self.loco_trajectory
+        max_timestep = traj.data.qpos.shape[0]
         
-        # Clamp to valid range
-        if local_timestep >= self.segments[segment_idx]['length']:
-            local_timestep = self.segments[segment_idx]['length'] - 1
+        # Clamp timestep to valid range
+        timestep = max(0, min(timestep, max_timestep - 1))
         
-        segment = self.segments[segment_idx]
-        
-        # Extract state from segment (already normalized)
-        qpos = segment['qpos'][local_timestep]
-        qvel = segment['qvel'][local_timestep]
+        # Extract raw trajectory state
+        qpos = traj.data.qpos[timestep]
+        qvel = traj.data.qvel[timestep]
         
         # Convert to Genesis format
-        genesis_state = self._convert_state_to_genesis(qpos, qvel, segment['joint_names'])
+        genesis_state = self._convert_state_to_genesis(qpos, qvel, traj.info.joint_names)
         
         return genesis_state
     
@@ -216,20 +211,53 @@ class LocoMujocoDataBridge:
         return genesis_batch
     
     def _convert_state_to_genesis(self, loco_qpos, loco_qvel, loco_joint_names):
-        """Convert single LocoMujoco state to Genesis format"""
+        """Convert single LocoMujoco state to Genesis format using skeleton_humanoid.py configuration"""
         
-        # Initialize Genesis DOF arrays
-        genesis_dof_pos = torch.zeros(self.genesis_env.robot.n_dofs, device=self.device)
-        genesis_dof_vel = torch.zeros(self.genesis_env.robot.n_dofs, device=self.device)
+        # Use skeleton_humanoid.py's motors_dof_idx order directly
+        n_controllable = len(self.motors_dof_idx)
+        genesis_dof_pos = torch.zeros(n_controllable, device=self.device)
+        genesis_dof_vel = torch.zeros(n_controllable, device=self.device)
         
-        # Map LocoMujoco joints to Genesis DOFs
-        for i, joint_name in enumerate(loco_joint_names):
-            if joint_name in self.joint_names:
-                # Find Genesis DOF index for this joint
-                if joint_name in self.genesis_env.joint_to_motor_idx:
-                    genesis_dof_idx = self.genesis_env.joint_to_motor_idx[joint_name]
-                    genesis_dof_pos[genesis_dof_idx] = float(loco_qpos[i])
-                    genesis_dof_vel[genesis_dof_idx] = float(loco_qvel[i])
+        # Map using skeleton_humanoid.py's joint order and motor indices
+        for motor_idx, global_dof_idx in enumerate(self.motors_dof_idx):
+            # Find which joint corresponds to this motor DOF index
+            joint_name = None
+            for name, dof_idx in self.genesis_env.joint_to_motor_idx.items():
+                if dof_idx == global_dof_idx:
+                    joint_name = name
+                    break
+            
+            if joint_name and joint_name in loco_joint_names:
+                # CRITICAL FIX: Use LocoMujoco's proper joint indexing system 
+                # 
+                # Problem: The refactored version was using loco_joint_names.index(joint_name) 
+                # which assumes qpos data is ordered the same as joint_names. This is WRONG.
+                # 
+                # Solution: Use LocoMujoco's joint_name2ind_qpos mapping which gives the 
+                # actual index where each joint's data is stored in the qpos array.
+                # 
+                # Why this matters: LocoMujoco stores joint data in an internal order that 
+                # doesn't match joint name lists. Using the wrong index means we were 
+                # assigning the wrong joint positions to Genesis joints, causing completely 
+                # incorrect trajectory following.
+                #
+                # This fix restores the same logic as the working deprecated version.
+                if hasattr(self.loco_trajectory, 'info') and hasattr(self.loco_trajectory.info, 'joint_name2ind_qpos'):
+                    if joint_name in self.loco_trajectory.info.joint_name2ind_qpos:
+                        loco_qpos_idx_array = self.loco_trajectory.info.joint_name2ind_qpos[joint_name]
+                        loco_qvel_idx_array = self.loco_trajectory.info.joint_name2ind_qvel[joint_name]
+                        
+                        # Extract scalar index (most joints are 1-DOF)
+                        loco_qpos_idx = loco_qpos_idx_array[0] if hasattr(loco_qpos_idx_array, '__getitem__') else loco_qpos_idx_array
+                        loco_qvel_idx = loco_qvel_idx_array[0] if hasattr(loco_qvel_idx_array, '__getitem__') else loco_qvel_idx_array
+                        
+                        genesis_dof_pos[motor_idx] = float(loco_qpos[loco_qpos_idx])
+                        genesis_dof_vel[motor_idx] = float(loco_qvel[loco_qvel_idx])
+                else:
+                    # Fallback to simple index lookup (may be incorrect for some datasets)
+                    loco_idx = loco_joint_names.index(joint_name)
+                    genesis_dof_pos[motor_idx] = float(loco_qpos[loco_idx])
+                    genesis_dof_vel[motor_idx] = float(loco_qvel[loco_idx])
         
         # Extract root state (first 7 elements: pos + quat)
         root_pos = torch.tensor(loco_qpos[:3], device=self.device, dtype=torch.float32)
@@ -247,24 +275,49 @@ class LocoMujocoDataBridge:
         }
     
     def _convert_batch_to_genesis(self, loco_qpos_batch, loco_qvel_batch, loco_joint_names):
-        """Convert batch of LocoMujoco states to Genesis format"""
+        """Convert batch of LocoMujoco states to Genesis format using skeleton_humanoid.py configuration"""
         
         batch_size = loco_qpos_batch.shape[0]
         
-        # Initialize Genesis DOF arrays
-        genesis_dof_pos = torch.zeros((batch_size, self.genesis_env.robot.n_dofs), device=self.device)
-        genesis_dof_vel = torch.zeros((batch_size, self.genesis_env.robot.n_dofs), device=self.device)
+        # Use skeleton_humanoid.py's motors_dof_idx order directly
+        n_controllable = len(self.motors_dof_idx)
+        genesis_dof_pos = torch.zeros((batch_size, n_controllable), device=self.device)
+        genesis_dof_vel = torch.zeros((batch_size, n_controllable), device=self.device)
         
-        # Map LocoMujoco joints to Genesis DOFs
-        for i, joint_name in enumerate(loco_joint_names):
-            if joint_name in self.joint_names:
-                if joint_name in self.genesis_env.joint_to_motor_idx:
-                    genesis_dof_idx = self.genesis_env.joint_to_motor_idx[joint_name]
-                    genesis_dof_pos[:, genesis_dof_idx] = torch.tensor(
-                        loco_qpos_batch[:, i], device=self.device, dtype=torch.float32
+        # Map using skeleton_humanoid.py's joint order and motor indices
+        for motor_idx, global_dof_idx in enumerate(self.motors_dof_idx):
+            # Find which joint corresponds to this motor DOF index
+            joint_name = None
+            for name, dof_idx in self.genesis_env.joint_to_motor_idx.items():
+                if dof_idx == global_dof_idx:
+                    joint_name = name
+                    break
+            
+            if joint_name and joint_name in loco_joint_names:
+                # CRITICAL FIX: Use LocoMujoco's proper joint indexing system (same fix as above)
+                if hasattr(self.loco_trajectory, 'info') and hasattr(self.loco_trajectory.info, 'joint_name2ind_qpos'):
+                    if joint_name in self.loco_trajectory.info.joint_name2ind_qpos:
+                        loco_qpos_idx_array = self.loco_trajectory.info.joint_name2ind_qpos[joint_name]
+                        loco_qvel_idx_array = self.loco_trajectory.info.joint_name2ind_qvel[joint_name]
+                        
+                        # Extract scalar index (most joints are 1-DOF)
+                        loco_qpos_idx = loco_qpos_idx_array[0] if hasattr(loco_qpos_idx_array, '__getitem__') else loco_qpos_idx_array
+                        loco_qvel_idx = loco_qvel_idx_array[0] if hasattr(loco_qvel_idx_array, '__getitem__') else loco_qvel_idx_array
+                        
+                        genesis_dof_pos[:, motor_idx] = torch.tensor(
+                            loco_qpos_batch[:, loco_qpos_idx], device=self.device, dtype=torch.float32
+                        )
+                        genesis_dof_vel[:, motor_idx] = torch.tensor(
+                            loco_qvel_batch[:, loco_qvel_idx], device=self.device, dtype=torch.float32
+                        )
+                else:
+                    # Fallback to simple index lookup
+                    loco_idx = loco_joint_names.index(joint_name)
+                    genesis_dof_pos[:, motor_idx] = torch.tensor(
+                        loco_qpos_batch[:, loco_idx], device=self.device, dtype=torch.float32
                     )
-                    genesis_dof_vel[:, genesis_dof_idx] = torch.tensor(
-                        loco_qvel_batch[:, i], device=self.device, dtype=torch.float32
+                    genesis_dof_vel[:, motor_idx] = torch.tensor(
+                        loco_qvel_batch[:, loco_idx], device=self.device, dtype=torch.float32
                     )
         
         # Extract root states
@@ -300,8 +353,13 @@ class LocoMujocoDataBridge:
         root_pos = state_data['root_pos'].unsqueeze(0).repeat(num_envs, 1)
         root_quat = state_data['root_quat'].unsqueeze(0).repeat(num_envs, 1)
         
-        # Apply to Genesis robot
-        self.genesis_env.robot.set_dofs_position(dof_pos, envs_idx=env_ids, zero_velocity=True)
+        # Apply to Genesis robot using motor DOF indices (consistent with skeleton_humanoid.py)
+        self.genesis_env.robot.set_dofs_position(
+            dof_pos, 
+            dofs_idx_local=self.motors_dof_idx, 
+            envs_idx=env_ids, 
+            zero_velocity=True
+        )
         self.genesis_env.robot.set_pos(root_pos, envs_idx=env_ids)
         self.genesis_env.robot.set_quat(root_quat, envs_idx=env_ids)
         

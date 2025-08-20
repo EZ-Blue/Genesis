@@ -81,7 +81,7 @@ class AMPGenesisIntegration:
         expert_obs_list = []
         trajectory_length = self.data_bridge.trajectory_length
         
-        # Sample every 10th timestep to reduce memory usage
+        # Sample every 10th timestep to reduce memory usage (reverted to fast version)
         sample_interval = 10
         n_samples = min(1000, trajectory_length // sample_interval)
         

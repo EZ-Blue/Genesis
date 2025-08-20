@@ -35,6 +35,7 @@ class SkeletonHumanoidEnv:
                  use_box_feet: bool = False,
                  disable_arms: bool = False,
                  show_viewer: bool = False,
+                 obs_history_length: int = 1,  # Removed for faster training
                  **kwargs):
         
         self.num_envs = num_envs
@@ -45,8 +46,11 @@ class SkeletonHumanoidEnv:
         self.max_episode_length = math.ceil(episode_length_s / dt)
         self.device = gs.device
         
+        # Remove observation history for faster training and better discriminator balance
+        self.obs_history_length = 1  # Force single timestep observations
+        
         # Configurations (matching current implementation)
-        self.reward_cfg = self._get_reward_config()
+        # self.reward_cfg = self._get_reward_config()
         
         # Initialize Genesis scene
         self._init_genesis_scene(show_viewer)
@@ -54,21 +58,30 @@ class SkeletonHumanoidEnv:
         # Load robot
         self._load_robot()
 
-        # Default joints for SkeletonTorque Model
+        # Joint names in LocoMujoco SkeletonTorque observation order
+        # This matches the order expected in LocoMujoco observations (indices 5-31)
         self.joint_names = {
+            # Right leg (5 joints)
+            "hip_flexion_r", "hip_adduction_r", "hip_rotation_r", "knee_angle_r", "ankle_angle_r", 
+
+            # "subtalar_angle_r", "mtp_angle_r"
+            
+            # Left leg (5 joints)
+            "hip_flexion_l", "hip_adduction_l", "hip_rotation_l", "knee_angle_l", "ankle_angle_l",
+
+            # "subtalar_angle_l", "mtp_angle_l"
+            
+            # Lumbar (3 joints) 
             "lumbar_extension", "lumbar_bending", "lumbar_rotation",
             
-            # Right leg
-            "hip_flexion_r", "hip_adduction_r", "hip_rotation_r", "knee_angle_r", "ankle_angle_r", "subtalar_angle_r", "mtp_angle_r",
-            
-            # Left leg  
-            "hip_flexion_l", "hip_adduction_l", "hip_rotation_l", "knee_angle_l", "ankle_angle_l", "subtalar_angle_l", "mtp_angle_l",
-            
-            # Right arm
+            # Right arm (7 joints)
             "arm_flex_r", "arm_add_r", "arm_rot_r", "elbow_flex_r", "pro_sup_r", "wrist_flex_r", "wrist_dev_r",
             
-            # Left arm
+            # Left arm (7 joints)
             "arm_flex_l", "arm_add_l", "arm_rot_l", "elbow_flex_l", "pro_sup_l", "wrist_flex_l", "wrist_dev_l",
+            
+            # Foot joints (excluded with box_feet=True)
+            "subtalar_angle_r", "mtp_angle_r", "subtalar_angle_l", "mtp_angle_l",
         }
         
         # Build scene
@@ -92,23 +105,23 @@ class SkeletonHumanoidEnv:
         print(f"   - Observations: {self.num_observations}")
         print(f"   - Episode length: {self.episode_length_s}s")
     
-    def _get_reward_config(self) -> Dict[str, Any]:
-        """Reward configuration for skeleton locomotion (LocoMujoco inspired)"""
-        return {
-            # Task-specific rewards (goal rewards)
-            "forward_motion": 1.0,        # Primary walking objective
-            "balance_stability": 0.5,     # Prevent falling sideways/backward
-            "upright_orientation": 0.3,   # Stay upright
-            "root_height": 0.2,          # Maintain proper height
-            "foot_contact": 0.2,         # Proper ground contact
+    # def _get_reward_config(self) -> Dict[str, Any]:
+    #     """Reward configuration for skeleton locomotion (LocoMujoco inspired)"""
+    #     return {
+    #         # Task-specific rewards (goal rewards)
+    #         "forward_motion": 1.0,        # Primary walking objective
+    #         "balance_stability": 0.5,     # Prevent falling sideways/backward
+    #         "upright_orientation": 0.3,   # Stay upright
+    #         "root_height": 0.2,          # Maintain proper height
+    #         "foot_contact": 0.2,         # Proper ground contact
             
-            # Regularization rewards
-            "joint_limits": 0.1,         # Prevent extreme poses
-            "energy_efficiency": -0.01,  # Minimize effort
+    #         # Regularization rewards
+    #         "joint_limits": 0.1,         # Prevent extreme poses
+    #         "energy_efficiency": -0.01,  # Minimize effort
             
-            # Optional trajectory tracking (if using expert trajectories)
-            "trajectory_tracking": 0.0,  # Disabled by default for pure RL
-        }
+    #         # Optional trajectory tracking (if using expert trajectories)
+    #         "trajectory_tracking": 0.0,  # Disabled by default for pure RL
+    #     }
 
     def _init_genesis_scene(self, show_viewer: bool = False):
         """Initialize Genesis scene with appropriate settings (from current base env)"""
@@ -176,7 +189,7 @@ class SkeletonHumanoidEnv:
             self.joint_to_motor_idx = {name: self.robot.get_joint(name).dof_start for name in self.joint_names}
 
         self.num_actions = len(self.motors_dof_idx)
-        print(f"Total Actoins: {self.num_actions}\n")
+        print(f"Total Actions: {self.num_actions}\n")
         print(f"List of Motor DoF Indices: {self.motors_dof_idx}\n")
         print(f"Joint to Motor Idx Mapping: {self.joint_to_motor_idx}\n")
 
@@ -255,9 +268,14 @@ class SkeletonHumanoidEnv:
         self.obs_buf = None  # Will be initialized based on observation space
         self.rew_buf = torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
         
+        # Observation history buffer for temporal context (like LocoMujoco's NStepWrapper)
+        # Will be initialized after first observation to get the correct size
+        # Observation history removed for faster training
+        
         # Trajectory tracking buffers (from base env)
         self.traj_idx = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         self.traj_time = torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
+        self.traj_start_offset = torch.zeros((self.num_envs,), device=self.device, dtype=torch.long)
         
         # Skeleton-specific buffers (from current implementation)
         # Previous actions for observations and smoothness
@@ -273,6 +291,24 @@ class SkeletonHumanoidEnv:
         
         # Extras for logging (from base env)
         self.extras = {"observations": {}}
+        
+        # Multi-component reward structure (based on successful LocoMujoco approach)
+        self.reward_cfg = {
+            # Forward motion incentive - PRIMARY DRIVER for walking
+            'forward_motion': 1.0,           # Simple forward walking reward
+            
+            # Optional: Add stability if needed
+            # 'upright_orientation': 0.3,     # Stay upright (reduced weight)
+            # 'balance_stability': 0.2,       # Prevent falling (reduced weight)
+            # 'joint_smoothness': 1.0,         # Smooth joint movements
+            
+            # Survival bonus (10% weight) - BASIC REQUIREMENTS
+            # 'alive_bonus': 1.0,              # Bonus for staying alive
+            # 'energy_efficiency': -0.1,       # Penalize excessive energy
+        }
+        
+        # Initialize reward functions
+        self._init_reward_functions()
 
     def _init_reward_functions(self):
         """Initialize reward functions based on configuration (from base env)"""
@@ -288,9 +324,10 @@ class SkeletonHumanoidEnv:
 
     @property
     def num_observations(self) -> int:
-        """Calculate observation space size"""
-        # Root: 5 (z + quat) + Controlled joints: num_actions + Root vel: 6 + Controlled joint vel: num_actions
-        return 5 + self.num_actions + 6 + self.num_actions
+        """Calculate observation space size (single timestep)"""
+        # Base observation: Root: 5 (z + quat) + Controlled joints: num_actions + Root vel: 6 + Controlled joint vel: num_actions
+        base_obs_size = 5 + self.num_actions + 6 + self.num_actions
+        return base_obs_size
 
     def step(self, actions: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, Dict]:
         """
@@ -321,7 +358,7 @@ class SkeletonHumanoidEnv:
         # Reset environments that are done (from base env)
         reset_env_ids = self.reset_buf.nonzero(as_tuple=False).reshape((-1,))
         if len(reset_env_ids) > 0:
-            self.reset_idx(reset_env_ids)
+            self._reset_environments(reset_env_ids)
         
         # Compute rewards (from base env)
         self._compute_rewards()
@@ -356,6 +393,9 @@ class SkeletonHumanoidEnv:
     def _apply_actions(self, actions: torch.Tensor):
         """Apply position control actions to joints using PD control"""
         
+        # Clip actions to reasonable range for stability
+        actions = torch.clamp(actions, min=-1.0, max=1.0)
+        
         # Actions represent target joint positions for PD control
         # Apply actions directly to the motors using pre-computed DOF indices
         self.robot.control_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
@@ -363,9 +403,10 @@ class SkeletonHumanoidEnv:
         # Track energy consumption (approximate for position control)
         if hasattr(self, 'dof_vel') and hasattr(self, 'energy_consumption'):
             # Get velocities for controlled DOFs only
-            controlled_dof_vel = self.dof_vel[:, self.motors_dof_idx]
+            local_dof_indices = [idx - self.robot.dof_start for idx in self.motors_dof_idx]
+            controlled_dof_vel = self.robot.get_dofs_velocity(local_dof_indices)
             # Estimate power from position error and velocity
-            position_error = actions - self.dof_pos[:, self.motors_dof_idx]
+            position_error = actions - self.robot.get_dofs_position(local_dof_indices)
             power = torch.sum(torch.abs(position_error * controlled_dof_vel), dim=1)
             self.energy_consumption += power * self.dt
 
@@ -401,39 +442,37 @@ class SkeletonHumanoidEnv:
         
         return done
 
-    def _compute_rewards(self):
-        """Compute rewards for current step (from base env)"""
-        self.rew_buf[:] = 0.0
-        
-        for reward_name, reward_func in self.reward_functions.items():
-            if reward_name in self.reward_cfg:
-                reward_scale = self.reward_cfg[reward_name]
-                reward_value = reward_func()
-                
-                self.rew_buf += reward_scale * reward_value
-                self.episode_sums[reward_name] += reward_scale * reward_value
-
     def _get_observations(self) -> torch.Tensor:
-        """Get observations matching LocoMujoco skeleton structure (exact same as current)"""
-        obs_components = [
-          # Root state (5D)
-          self.root_pos[:, 2:3],  # z position
-          self.root_quat,         # quaternion
-
-          # Controlled joint positions (27D) - use your motor indices
-          self.dof_pos[:, self.motors_dof_idx],
-
-          # Root velocity (6D)
-          self.root_lin_vel,
-          self.root_ang_vel,
-
-          # Controlled joint velocities (27D) - use your motor indices  
-          self.dof_vel[:, self.motors_dof_idx],
-        ]
+        """Get observations matching LocoMujoco SkeletonTorque format exactly"""
+        # LocoMujoco format: [q_root_no_xy(5), joint_pos(27), dq_root(6), joint_vel(27)]
         
-        obs = torch.cat(obs_components, dim=-1)
+        # Component 1: q_root_no_xy (5D) = [z, quat_w, quat_x, quat_y, quat_z]
+        q_root_no_xy = torch.cat([
+            self.root_pos[:, 2:3],  # z position
+            self.root_quat          # quaternion [w, x, y, z] 
+        ], dim=-1)
         
-        # Update buffers
+        # Component 2: Joint positions (27D) in controlled joint order
+        joint_pos = self.robot.get_dofs_position([idx - self.robot.dof_start for idx in self.motors_dof_idx])
+        
+        # Component 3: dq_root (6D) = [lin_vel_x, lin_vel_y, lin_vel_z, ang_vel_x, ang_vel_y, ang_vel_z]
+        dq_root = torch.cat([
+            self.root_lin_vel,  # linear velocity [x, y, z]
+            self.root_ang_vel   # angular velocity [x, y, z]
+        ], dim=-1)
+        
+        # Component 4: Joint velocities (27D) in controlled joint order
+        joint_vel = self.robot.get_dofs_velocity([idx - self.robot.dof_start for idx in self.motors_dof_idx])
+        
+        # Assemble final observation in LocoMujoco order
+        obs = torch.cat([
+            q_root_no_xy,  # 5D root state
+            joint_pos,     # 27D joint positions
+            dq_root,       # 6D root velocity
+            joint_vel      # 27D joint velocities
+        ], dim=-1)
+        
+        # Update buffers for compatibility
         if self.obs_buf is None:
             self.obs_buf = torch.zeros_like(obs)
         self.obs_buf[:] = obs
@@ -455,10 +494,38 @@ class SkeletonHumanoidEnv:
             self.traj_idx[env_ids] = 0
             self.traj_time[env_ids] = 0.0
         
+        # Observation history removed for faster training
+        
         # Reset robot to default pose (skeleton implementation)
         self._reset_robot_pose(env_ids)
         
         # Log episode rewards (from base env)
+        self._log_episode_rewards(env_ids)
+
+    def _reset_environments(self, env_ids: torch.Tensor):
+        """Reset specific environments with randomized trajectory starting points"""
+        if len(env_ids) == 0:
+            return
+            
+        # Reset episode length
+        self.episode_length_buf[env_ids] = 0
+        self.reset_buf[env_ids] = False
+        
+        # Randomize trajectory starting points for better coverage
+        if hasattr(self, 'data_bridge') and self.data_bridge:
+            max_episode_timesteps = int(self.max_episode_length * 100)  # Convert to 100Hz
+            safe_start_range = max(1, self.data_bridge.trajectory_length - max_episode_timesteps)
+            random_starts = torch.randint(0, safe_start_range, (len(env_ids),), device=self.device)
+            self.traj_start_offset[env_ids] = random_starts
+        
+        # Reset trajectory tracking
+        self.traj_idx[env_ids] = 0
+        self.traj_time[env_ids] = 0.0
+        
+        # Reset robot to default pose
+        self._reset_robot_pose(env_ids)
+        
+        # Log episode rewards
         self._log_episode_rewards(env_ids)
 
     def _reset_robot_pose(self, env_ids: torch.Tensor):
@@ -538,6 +605,32 @@ class SkeletonHumanoidEnv:
         self.th = TrajectoryHandler(model=mock_model, warn=warn, traj_path=traj_path,
                                     traj=traj, control_dt=self.dt, **th_params)
 
+    def _compute_rewards(self):
+        """Compute rewards based on current state and actions"""
+        # Initialize reward buffer
+        self.rew_buf.fill_(0.0)
+        
+        # Apply each reward function
+        for reward_name, reward_scale in self.reward_cfg.items():
+            if hasattr(self, f"_reward_{reward_name}"):
+                reward_func = getattr(self, f"_reward_{reward_name}")
+                reward_value = reward_func()
+                self.rew_buf += reward_scale * reward_value
+                
+                # Track episode sums for logging
+                if hasattr(self, 'episode_sums') and reward_name in self.episode_sums:
+                    self.episode_sums[reward_name] += reward_value
+
+    def _reward_target_heading(self) -> torch.Tensor:
+        """
+        Reward moving along a target heading direction at target speed
+        ** From AMP paper 
+        """
+        target_vel = 1.0
+        forward_vel = self.root_lin_vel[:, 0] # X-axis direction
+ 
+        return torch.exp(-0.25 * (target_vel - forward_vel)**2)
+
     # Reward Functions (exact same as current skeleton implementation)
     def _reward_upright_orientation(self) -> torch.Tensor:
         """Reward staying upright"""
@@ -555,9 +648,47 @@ class SkeletonHumanoidEnv:
         return torch.exp(-height_error * 5.0)
     
     def _reward_forward_motion(self) -> torch.Tensor:
-        """Reward forward motion (key for walking)"""
+        """Reward forward motion (PRIMARY DRIVER for locomotion)"""
         forward_vel = self.root_lin_vel[:, 0]  # X-axis velocity
-        return torch.clamp(forward_vel, min=0.0, max=2.0)  # Reward 0-2 m/s forward
+        
+        # Explicit penalty for backward motion
+        backward_penalty = torch.where(forward_vel < 0, -torch.abs(forward_vel), torch.zeros_like(forward_vel))
+        
+        # Reward forward motion toward target speed
+        target_vel = 1.2  # 1.2 m/s normal human walking speed
+        vel_error = torch.abs(forward_vel - target_vel)
+        forward_reward = torch.exp(-vel_error * 2.0)
+        
+        # Combine: strong forward reward + explicit backward penalty
+        return forward_reward + backward_penalty
+    
+    def _reward_velocity_tracking(self) -> torch.Tensor:
+        """Match target velocity direction and magnitude"""
+        current_vel = self.root_lin_vel[:, :2]  # X, Y velocity
+        target_vel = self.target_velocity[:, :2]  # Target X, Y velocity
+        vel_error = torch.norm(current_vel - target_vel, dim=1)
+        return torch.exp(-vel_error * 3.0)
+    
+    def _reward_joint_smoothness(self) -> torch.Tensor:
+        """Reward smooth joint movements (reduce jerkiness)"""
+        if not hasattr(self, '_prev_dof_pos'):
+            self._prev_dof_pos = self.dof_pos.clone()
+            return torch.ones((self.num_envs,), device=self.device)
+        
+        # Penalize large joint velocity changes
+        local_dof_indices = [idx - self.robot.dof_start for idx in self.motors_dof_idx]
+        current_joint_pos = self.robot.get_dofs_position(local_dof_indices)
+        if not hasattr(self, '_prev_joint_pos'):
+            self._prev_joint_pos = current_joint_pos.clone()
+        joint_vel_change = torch.norm(current_joint_pos - self._prev_joint_pos, dim=1)
+        self._prev_joint_pos = current_joint_pos.clone()
+        return torch.exp(-joint_vel_change * 0.5)
+    
+    def _reward_alive_bonus(self) -> torch.Tensor:
+        """Bonus for staying alive and upright"""
+        # Simple alive bonus - constant reward for not falling
+        is_alive = self.root_pos[:, 2] > 0.5  # Above ground
+        return is_alive.float()
     
     def _reward_balance_stability(self) -> torch.Tensor:
         """Penalize excessive lateral/vertical velocity (prevents falling)"""
@@ -579,28 +710,59 @@ class SkeletonHumanoidEnv:
     def _reward_joint_limits(self) -> torch.Tensor:
         """Penalize extreme joint positions"""
         # Penalize joints near limits (rough approximation)
-        joint_penalty = torch.sum(torch.abs(self.dof_pos[:, self.motors_dof_idx]), dim=1)
+        local_dof_indices = [idx - self.robot.dof_start for idx in self.motors_dof_idx]
+        joint_penalty = torch.sum(torch.abs(self.robot.get_dofs_position(local_dof_indices)), dim=1)
         return torch.exp(-joint_penalty * 0.1)
 
     def _reward_trajectory_tracking(self) -> torch.Tensor:
-        """Reward for tracking trajectory (from base env)"""
-        if self.th is None:
-            return torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
-            
-        target_state = self._get_trajectory_target_state()
-        if target_state is None:
-            return torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
-        
-        # Compute position tracking error
-        if hasattr(target_state, 'qpos') and target_state.qpos is not None:
-            target_qpos = torch.tensor(target_state.qpos, device=self.device, dtype=torch.float32)
-            if len(target_qpos.shape) == 1:
-                target_qpos = target_qpos.unsqueeze(0).repeat(self.num_envs, 1)
-            
-            pos_error = torch.norm(self.dof_pos - target_qpos, dim=-1)
-            return torch.exp(-pos_error)
-        
+        """Efficient vectorized trajectory tracking reward - TEMPORARILY DISABLED"""
+        # Disable this reward temporarily to isolate DOF indexing issues
         return torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
+        
+        try:
+            # Initialize trajectory cache if needed
+            if not hasattr(self, '_traj_cache'):
+                self._traj_cache = {}
+                self._traj_cache_size = 100  # Cache last 100 trajectory states
+            
+            # Use first environment's timestep with randomized offset
+            episode_timestep = int((self.episode_length_buf[0] * self.dt * 100).item())
+            trajectory_offset = self.traj_start_offset[0].item()
+            timestep = trajectory_offset + episode_timestep
+            timestep = max(0, min(timestep, self.data_bridge.trajectory_length - 1))
+            
+            # Check cache first
+            if timestep not in self._traj_cache:
+                # Limit cache size
+                if len(self._traj_cache) >= self._traj_cache_size:
+                    # Remove oldest entry
+                    oldest_key = min(self._traj_cache.keys())
+                    del self._traj_cache[oldest_key]
+                
+                # Get trajectory state and cache it
+                target_state = self.data_bridge.get_trajectory_state(timestep)
+                if target_state and 'dof_pos' in target_state:
+                    # Pre-convert to tensor and select controlled joints only
+                    target_full = torch.tensor(target_state['dof_pos'], device=self.device, dtype=torch.float32)
+                    target_controlled = target_full[self.motors_dof_idx]
+                    self._traj_cache[timestep] = target_controlled
+                else:
+                    return torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
+            
+            # Vectorized computation using cached data
+            target_pos = self._traj_cache[timestep]  # [num_controlled_joints]
+            
+            # Convert global DOF indices to local DOF indices for robot entity
+            local_dof_indices = [idx - self.robot.dof_start for idx in self.motors_dof_idx]
+            current_pos = self.robot.get_dofs_position(local_dof_indices)  # [num_envs, num_controlled_joints]
+            
+            # Broadcast target to all environments and compute error
+            pos_error = torch.norm(current_pos - target_pos.unsqueeze(0), dim=1)  # [num_envs]
+            
+            return torch.exp(-pos_error * 2.0)
+            
+        except Exception:
+            return torch.zeros((self.num_envs,), device=self.device, dtype=torch.float32)
 
     def _apply_trajectory_state(self, traj_state: TrajState, env_ids: torch.Tensor):
         """Apply trajectory state to Genesis physics simulation (from base env)"""

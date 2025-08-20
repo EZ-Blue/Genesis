@@ -369,12 +369,12 @@ def create_default_config() -> Dict:
         # Training
         'max_episode_steps': 250,  # 5 seconds at 50Hz
         'min_episode_steps': 100,
-        'env_reward_weight': 0.3,  # 30% env reward, 70% AMP reward
+        'env_reward_weight': 0.5,  # 30% env reward, 70% AMP reward
         'log_interval': 5,
         
         # Policy network
         'policy': {
-            'hidden_layers': [512, 256],
+            'hidden_layers': [512, 256, 128],
             'activation': 'tanh',
             'learning_rate': 3e-4,
             'clip_epsilon': 0.2
@@ -382,7 +382,7 @@ def create_default_config() -> Dict:
         
         # Discriminator
         'discriminator': {
-            'hidden_layers': [256, 128],
+            'hidden_layers': [512, 256],
             'activation': 'tanh',
             'learning_rate': 1e-4,
             'use_running_norm': True

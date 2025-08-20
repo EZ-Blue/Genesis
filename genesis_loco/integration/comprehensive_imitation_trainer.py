@@ -260,7 +260,8 @@ class ComprehensiveImitationTrainer:
             episode_length_s=self.config['episode_length_s'],
             dt=self.config['dt'],
             show_viewer=self.config.get('show_viewer', False),
-            use_box_feet=self.config.get('use_box_feet', True)
+            use_box_feet=self.config.get('use_box_feet', True),
+            # obs_history_length removed for faster training
         )
         
         self.obs_dim = self.env.num_observations
@@ -284,6 +285,9 @@ class ComprehensiveImitationTrainer:
         print(f"   ✅ Expert {self.behavior} trajectory loaded:")
         print(f"      - Length: {self.data_bridge.trajectory_length} timesteps")
         print(f"      - Frequency: {self.data_bridge.trajectory_frequency} Hz")
+        
+        # Connect data bridge to environment for trajectory tracking rewards
+        self.env.data_bridge = self.data_bridge
     
     def _setup_amp_integration(self):
         """Setup AMP discriminator and expert data"""
@@ -463,9 +467,9 @@ class ComprehensiveImitationTrainer:
         for key in ppo_metrics_list[0].keys():
             ppo_metrics[key] = sum(m[key] for m in ppo_metrics_list) / len(ppo_metrics_list)
         
-        # Update discriminator only if not overfitting (key fix!)
+        # Simple discriminator overfitting prevention (reverted to fast version)
         recent_expert_acc = getattr(self, '_last_expert_acc', 0.5)
-        if recent_expert_acc < 0.90:  # Prevent discriminator overfitting
+        if recent_expert_acc < 0.90:  # Simple check
             disc_metrics = self.amp_integration.train_discriminator_step(batch['observations'])
             self._last_expert_acc = disc_metrics.get('expert_accuracy', 0.5)
         else:
@@ -515,7 +519,7 @@ class ComprehensiveImitationTrainer:
                 self._save_checkpoint(iteration)
             
             # Plot progress
-            if iteration % (self.config['log_interval'] * 4) == 0 and iteration > 0:
+            if iteration % (self.config['log_interval'] * 10) == 0 and iteration > 0:
                 self._plot_training_progress(iteration)
             
             # Save best model
@@ -695,6 +699,7 @@ def create_behavior_config(behavior: str = "walk") -> Dict:
         'dt': 0.01,
         'show_viewer': False,
         'use_box_feet': True,
+        # obs_history_length removed for faster training and better discriminator balance
         
         # Training 
         'max_episode_steps': 15,
@@ -714,18 +719,18 @@ def create_behavior_config(behavior: str = "walk") -> Dict:
             'hidden_layers': [512, 256],     # LocoMujoco: [512, 256]
             'activation': 'tanh',
             'learning_rate': 6e-5,           # LocoMujoco: 6e-5
-            'clip_epsilon': 0.1,             # LocoMujoco: 0.1 (was 0.2)
+            'clip_epsilon': 0.2,             # LocoMujoco: 0.1 (was 0.2)
             'value_coeff': 0.5,
             'entropy_coeff': 0.0,            # LocoMujoco: 0.0 (was 0.01)
             'use_obs_norm': True,
             'max_grad_norm': 0.75            # LocoMujoco: 0.75
         },
         
-        # Discriminator - EXACT LOCOMUJOCO CONFIG
+        # Discriminator - Reduced capacity to prevent overfitting
         'discriminator': {
-            'hidden_layers': [512, 256],     # LocoMujoco: [512, 256]
+            'hidden_layers': [256, 128],     # Reduced from [512, 256]
             'activation': 'tanh',
-            'learning_rate': 5e-6,           # LocoMujoco: 5e-5
+            'learning_rate': 2e-6,           # Slower learning
             'use_running_norm': True
         }
     }
@@ -733,20 +738,21 @@ def create_behavior_config(behavior: str = "walk") -> Dict:
     # Behavior-specific adjustments
     if behavior == "walk":
         base_config.update({
-            'episode_length_s': 15.0,
-            'env_reward_weight': 0.1
+            'episode_length_s': 8.0,  # Doubled to see more trajectory
+            'max_episode_steps': 800,
+            'env_reward_weight': 0.5
         })
     elif behavior == "run":
         base_config.update({
             'episode_length_s': 12.0,
             'max_episode_steps': 600,
-            'env_reward_weight': 0.15
+            'env_reward_weight': 0.5
         })
     elif behavior == "squat":
         base_config.update({
             'episode_length_s': 10.0,
             'max_episode_steps': 500,
-            'env_reward_weight': 0.2
+            'env_reward_weight': 0.5
         })
     
     return base_config
@@ -791,12 +797,12 @@ def main():
         iterations = 100
         print("⚡ Quick test configuration")
     elif scale_choice == "3":
-        config.update({'num_envs': 2048})
-        iterations = 3000
-        print("🚀 Full scale configuration")
+        config.update({'num_envs': 256})
+        iterations = 15000  # 18x more training to match successful approach
+        print("🚀 Full scale configuration - EXTENDED TRAINING")
     else:
-        iterations = 1000
-        print("🎯 Medium training configuration")
+        iterations = 5000  # 5x more training for better sequential learning
+        print("🎯 Medium training configuration - EXTENDED")
     
     # Visualization option
     vis_choice = input("Enable visualization during training? (y/n): ").strip().lower()

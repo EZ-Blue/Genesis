@@ -89,7 +89,7 @@ class AMPDiscriminator(nn.Module):
         self._init_weights()
     
     def _init_weights(self):
-        """Initialize weights using Xavier uniform"""
+        """Initialize weights using Xavier uniform (reverted to fast version)"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
@@ -145,7 +145,7 @@ class AMPTrainer:
                           expert_obs: torch.Tensor,
                           policy_obs: torch.Tensor) -> Dict[str, float]:
         """
-        Single discriminator training step
+        Simple discriminator training step (reverted to fast version)
         
         Args:
             expert_obs: Expert observations [batch_size, obs_dim]

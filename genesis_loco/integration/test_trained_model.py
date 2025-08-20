@@ -76,7 +76,7 @@ class ModelTester:
         print(f"      - Best reward: {self.reward:.3f}")
         
         # Get model dimensions from config or guess
-        obs_dim = 65  # Default skeleton observation dim
+        obs_dim = 65   # Skeleton observation dim (single timestep)
         action_dim = 27  # Default skeleton action dim (with box feet)
         
         # Create policy network
@@ -106,7 +106,8 @@ class ModelTester:
             episode_length_s=30.0,  # Longer episodes for testing
             dt=0.01,
             show_viewer=self.show_viewer,
-            use_box_feet=True
+            use_box_feet=True,
+            # obs_history_length removed for faster training
         )
         
         print(f"   ✅ Environment ready:")
