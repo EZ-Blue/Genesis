@@ -21,6 +21,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from environments.skeleton_humanoid import SkeletonHumanoidEnv
 from integration.behavior_cloning_trainer import BehaviorCloningMLP
+from integration.behavior_cloning_trainer_fixed import FixedBehaviorCloningMLP
 import genesis as gs
 
 
@@ -76,7 +77,7 @@ class BehaviorCloningTester:
         print(f"✅ {message}")
     
     def _load_model(self):
-        """Load the trained behavior cloning model"""
+        """Load the trained behavior cloning model (handles both old and new architectures)"""
         print(f"📥 Loading model from {self.model_path}...")
         
         # Load checkpoint
@@ -87,19 +88,51 @@ class BehaviorCloningTester:
         self.action_dim = checkpoint['action_dim']
         self.behavior = checkpoint.get('behavior', 'unknown')
         
-        # Create and load model
-        self.model = BehaviorCloningMLP(
-            obs_dim=self.obs_dim,
-            action_dim=self.action_dim,
-            hidden_dims=[256, 128]
-        ).to(self.device)
+        # Detect model type based on state_dict keys
+        state_dict_keys = checkpoint['model_state_dict'].keys()
+        is_fixed_model = 'action_scale' in state_dict_keys and 'output_layer.weight' in state_dict_keys
         
-        self.model.load_state_dict(checkpoint['model_state_dict'])
+        if is_fixed_model:
+            print("   🔧 Detected FIXED model architecture")
+            # Create fixed model
+            self.model = FixedBehaviorCloningMLP(
+                obs_dim=self.obs_dim,
+                action_dim=self.action_dim,
+                hidden_dims=[128, 64]  # Fixed model architecture
+            ).to(self.device)
+        else:
+            print("   📦 Detected original model architecture")
+            # Try to infer hidden dims from state dict
+            # Look for network layers to determine architecture
+            hidden_dims = [256, 128]  # Default
+            
+            # Check if smaller architecture was used
+            if 'network.2.weight' in state_dict_keys:
+                layer2_size = checkpoint['model_state_dict']['network.2.weight'].shape[0]
+                if layer2_size == 64:
+                    hidden_dims = [128, 64]
+            
+            self.model = BehaviorCloningMLP(
+                obs_dim=self.obs_dim,
+                action_dim=self.action_dim,
+                hidden_dims=hidden_dims
+            ).to(self.device)
+        
+        # Load state dict
+        try:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            print("✅ State dict loaded successfully")
+        except Exception as e:
+            print(f"⚠️  State dict loading failed: {e}")
+            print("   Trying to load with strict=False...")
+            self.model.load_state_dict(checkpoint['model_state_dict'], strict=False)
+        
         self.model.eval()  # Set to evaluation mode
         
         total_params = sum(p.numel() for p in self.model.parameters())
         print(f"✅ Model loaded: {total_params:,} parameters")
         print(f"   Behavior: {self.behavior}")
+        print(f"   Architecture: {'FIXED' if is_fixed_model else 'Original'}")
         print(f"   Input: {self.obs_dim} observations -> Output: {self.action_dim} positions")
     
     def _setup_environment(self):

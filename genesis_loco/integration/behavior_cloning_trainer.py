@@ -5,6 +5,10 @@ Simple Behavior Cloning Trainer for Genesis Skeleton Humanoid
 Direct imitation learning approach that trains an MLP to predict expert actions
 given current observations. Much simpler than PPO+AMP and often more effective
 for locomotion tasks.
+
+UPDATED: Now uses physics-based expert observations from the improved data_bridge
+with caching for efficient training. This ensures expert data comes from smooth,
+continuous motion that matches the Genesis simulation physics.
 """
 
 import torch
@@ -196,52 +200,59 @@ class BehaviorCloningTrainer:
         total_params = sum(p.numel() for p in self.model.parameters())
         print(f"✅ Behavior cloning model: {total_params:,} parameters")
     
-    def _generate_training_data(self, num_samples: int = 10000) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Generate observation-action pairs from expert trajectory"""
-        print(f"📊 Generating {num_samples:,} training samples...")
+    def _generate_training_data(self, num_samples: int = 88000) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Generate observation-action pairs from expert trajectory using physics-based collection"""
+        print(f"📊 Generating {num_samples:,} training samples using physics-based expert data...")
         
+        # Use cached physics-based expert observations
+        expert_observations = self.data_bridge.get_expert_observations_cached(
+            dataset_name=self.behavior,
+            num_timesteps=None,  # Use all available timesteps
+            start_timestep=0,
+            step_interval=1,
+            force_reload=False
+        )
+        
+        if expert_observations is None:
+            raise RuntimeError("Failed to load physics-based expert observations!")
+        
+        print(f"✅ Loaded {expert_observations.shape[0]} physics-based expert observations")
+        
+        # Sample from the physics-based observations
+        if num_samples > expert_observations.shape[0]:
+            print(f"⚠️  Requested {num_samples} samples but only {expert_observations.shape[0]} available")
+            num_samples = expert_observations.shape[0]
+        
+        # Random sampling for training robustness
+        indices = torch.randperm(expert_observations.shape[0], device=self.device)[:num_samples]
+        sampled_observations = expert_observations[indices]
+        
+        # Generate corresponding target positions from expert trajectory states
         observations = []
         actions = []
         
-        # Sample random timesteps from trajectory
-        timesteps = np.random.randint(0, self.trajectory_length - 10, num_samples)
+        print(f"📊 Collecting {num_samples:,} target positions from trajectory...")
         
-        # Debug: Check first sample to understand data format
-        first_state = self.data_bridge.get_trajectory_state(0)
-        print(f"   Debug: First state keys: {list(first_state.keys()) if first_state else 'None'}")
-        if first_state:
-            for key, value in first_state.items():
-                if isinstance(value, (list, np.ndarray)):
-                    print(f"   Debug: {key} shape: {np.array(value).shape}")
+        # Sample timesteps corresponding to the observations
+        timesteps = np.random.randint(0, self.trajectory_length - 10, num_samples)
         
         for i, timestep in enumerate(timesteps):
             if i % 1000 == 0:
                 print(f"   Progress: {i:,}/{num_samples:,} ({100*i/num_samples:.1f}%)")
             
-            # Get expert state at this timestep
+            # Get expert state for target positions
             current_state = self.data_bridge.get_trajectory_state(timestep)
             if current_state is None:
                 continue
             
-            # Get next state for action (what expert did)
-            next_state = self.data_bridge.get_trajectory_state(timestep + 1)
-            if next_state is None:
-                continue
-            
-            # Convert states to observations and actions
             try:
-                # Create observation from current state
-                current_obs = self._state_to_observation(current_state)
-                if current_obs is None:
-                    continue
-                
                 # Extract target joint positions from current state
                 target_positions = self._extract_target_positions(current_state)
                 if target_positions is None:
                     continue
                 
-                observations.append(current_obs)
-                actions.append(target_positions)  # Now contains target positions, not actions
+                observations.append(sampled_observations[i].cpu().numpy())
+                actions.append(target_positions)
                 
             except Exception as e:
                 if i < 10:  # Only print first few errors for debugging
@@ -249,11 +260,6 @@ class BehaviorCloningTrainer:
                 continue
         
         if len(observations) == 0:
-            print("❌ No valid samples found. Checking data bridge format...")
-            # Additional debugging
-            for i in range(min(5, self.trajectory_length)):
-                state = self.data_bridge.get_trajectory_state(i)
-                print(f"   Sample {i}: {state}")
             raise RuntimeError("No valid training samples generated!")
         
         # Convert to tensors
@@ -267,15 +273,14 @@ class BehaviorCloningTrainer:
         return obs_tensor, pos_tensor
     
     def _state_to_observation(self, state: Dict) -> np.ndarray:
-        """Convert trajectory state to environment observation format"""
+        """Convert trajectory state to environment observation format (now mainly for debugging)"""
+        # NOTE: This method is kept for compatibility but the main training now uses
+        # physics-based observations directly from data_bridge.get_expert_observations_cached()
         if state is None:
             return None
             
         try:
             obs_parts = []
-            
-            # Extract available data based on actual keys in state
-            available_keys = state.keys()
             
             # Helper function to safely convert tensors to numpy
             def to_numpy(data):
@@ -298,11 +303,10 @@ class BehaviorCloningTrainer:
             else:
                 obs_parts.append([1.0, 0.0, 0.0, 0.0])  # Default quaternion
             
-            # Joint positions (controlled joints only) - UPDATED: data_bridge already returns motor DOF order
+            # Joint positions (controlled joints only)
             if 'dof_pos' in state:
                 dof_pos = to_numpy(state['dof_pos'])
-                # data_bridge now returns data already in motor DOF order, no extraction needed
-                controlled_joint_pos = dof_pos  # Already in correct order
+                controlled_joint_pos = dof_pos  # Already in correct order from data_bridge
                 obs_parts.append(controlled_joint_pos)
             else:
                 obs_parts.append(np.zeros(self.action_dim))
@@ -320,11 +324,10 @@ class BehaviorCloningTrainer:
             else:
                 obs_parts.append([0.0, 0.0, 0.0])
             
-            # Joint velocities (controlled joints only) - UPDATED: data_bridge already returns motor DOF order
+            # Joint velocities (controlled joints only)
             if 'dof_vel' in state:
                 dof_vel = to_numpy(state['dof_vel'])
-                # data_bridge now returns data already in motor DOF order, no extraction needed
-                controlled_joint_vel = dof_vel  # Already in correct order
+                controlled_joint_vel = dof_vel  # Already in correct order from data_bridge
                 obs_parts.append(controlled_joint_vel)
             else:
                 obs_parts.append(np.zeros(self.action_dim))

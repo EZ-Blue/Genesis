@@ -55,7 +55,7 @@ def create_training_config(args) -> GAILConfig:
         disc_ent_coef=0.01,
         
         # Network architecture
-        hidden_layers=[512, 256],
+        hidden_layers=[256, 128],
         activation='tanh',
         init_std=0.125,
         learnable_std=False,

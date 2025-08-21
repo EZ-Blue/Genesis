@@ -81,7 +81,8 @@ class GAILPolicyVisualizer:
         policy = PPOActorCritic(
             obs_dim=self.env.num_observations,
             action_dim=self.env.num_actions,
-            hidden_layers=[512, 256],
+            # hidden_layers=[512, 256],
+            hidden_layers=[256, 128],
             activation='tanh',
             init_std=0.125,
             learnable_std=False,

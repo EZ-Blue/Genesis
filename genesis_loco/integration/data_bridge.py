@@ -19,6 +19,8 @@ import torch
 import numpy as np
 import sys
 import os
+import pickle
+from pathlib import Path
 
 # Add LocoMujoco path
 sys.path.append('/home/ez/Documents/loco-mujoco')
@@ -53,6 +55,11 @@ class LocoMujocoDataBridge:
         self.segment_length = 300  # 3 seconds at 100Hz (covers full gait cycle)
         self.segment_overlap = 50  # 0.5 second overlap between segments
         self.segments = []  # Cached segmented trajectories
+        
+        # Expert observation caching
+        self.cache_dir = Path("./expert_obs_cache")
+        self.cache_dir.mkdir(exist_ok=True)
+        self.cached_expert_observations = None
         
     def load_trajectory(self, dataset_name: str = "walk"):
         """
@@ -385,7 +392,8 @@ class LocoMujocoDataBridge:
     
     def apply_trajectory_state(self, state_data, env_ids=None):
         """
-        Apply trajectory state to Genesis environment
+        Apply trajectory state to Genesis environment with physics integration
+        for smooth, continuous motion (resolves GAIL discriminator issues)
         
         Args:
             state_data: State data from get_trajectory_state()
@@ -406,13 +414,177 @@ class LocoMujocoDataBridge:
             dof_pos, 
             dofs_idx_local=self.motors_dof_idx, 
             envs_idx=env_ids, 
-            zero_velocity=True
+            zero_velocity=False  # Keep velocity for physics integration
         )
         self.genesis_env.robot.set_pos(root_pos, envs_idx=env_ids)
         self.genesis_env.robot.set_quat(root_quat, envs_idx=env_ids)
         
+        # CRITICAL: Physics integration for smooth motion (like verify_trajectory.py)
+        self.genesis_env.scene.step()
+        
         # Update environment state buffers
         self.genesis_env._update_robot_state()
+    
+    def get_expert_observations_cached(self, 
+                                     dataset_name: str = "walk",
+                                     num_timesteps: int = None,
+                                     start_timestep: int = 0,
+                                     step_interval: int = 1,
+                                     force_reload: bool = False) -> torch.Tensor:
+        """
+        Get expert observations with caching for fast reloading
+        
+        Args:
+            dataset_name: Dataset name for cache filename
+            num_timesteps: Number of timesteps to collect (None = all available)
+            start_timestep: Starting timestep
+            step_interval: Collect every N timesteps  
+            force_reload: Force regeneration even if cache exists
+            
+        Returns:
+            expert_observations: [num_collected, obs_dim] tensor
+        """
+        # Use all timesteps if not specified
+        if num_timesteps is None:
+            num_timesteps = self.trajectory_length - start_timestep
+        
+        # Generate cache key from parameters
+        cache_key = f"{dataset_name}_n{num_timesteps}_s{start_timestep}_i{step_interval}"
+        cache_file = self.cache_dir / f"expert_obs_{cache_key}.pt"
+        
+        # Try loading from cache first
+        if cache_file.exists() and not force_reload:
+            print(f"📦 Loading cached expert observations: {cache_file.name}")
+            try:
+                cached_data = torch.load(cache_file, map_location=self.device)
+                self.cached_expert_observations = cached_data['observations']
+                print(f"✅ Loaded {self.cached_expert_observations.shape[0]} cached observations")
+                return self.cached_expert_observations
+            except Exception as e:
+                print(f"⚠️  Cache loading failed ({e}), regenerating...")
+        
+        # Generate expert observations with physics integration
+        print(f"🔄 Generating expert observations (will be cached for future use)")
+        expert_observations = self._collect_physics_expert_observations(
+            start_timestep=start_timestep,
+            num_timesteps=num_timesteps,
+            step_interval=step_interval
+        )
+        
+        if expert_observations is not None:
+            # Save to cache
+            print(f"💾 Caching expert observations: {cache_file.name}")
+            cache_data = {
+                'observations': expert_observations,
+                'dataset_name': dataset_name,
+                'num_timesteps': num_timesteps,
+                'start_timestep': start_timestep,
+                'step_interval': step_interval,
+                'obs_shape': expert_observations.shape,
+                'device': str(self.device)
+            }
+            try:
+                torch.save(cache_data, cache_file)
+                print(f"✅ Expert observations cached successfully")
+            except Exception as e:
+                print(f"⚠️  Cache saving failed: {e}")
+            
+            self.cached_expert_observations = expert_observations
+        
+        return expert_observations
+    
+    def _collect_physics_expert_observations(self,
+                                           start_timestep: int = 0,
+                                           num_timesteps: int = None,
+                                           step_interval: int = 1) -> torch.Tensor:
+        """
+        Internal method to collect expert observations with physics integration
+        """
+        if self.loco_trajectory is None:
+            print("❌ No trajectory loaded")
+            return None
+        
+        # Use all timesteps if not specified
+        if num_timesteps is None:
+            num_timesteps = self.trajectory_length - start_timestep
+        
+        # Limit to available trajectory length
+        actual_num_timesteps = min(num_timesteps, self.trajectory_length - start_timestep)
+        
+        print(f"📊 Collecting physics-based expert observations:")
+        print(f"   Start: timestep {start_timestep}")
+        print(f"   Duration: {actual_num_timesteps} timesteps")
+        print(f"   Step interval: {step_interval}")
+        print(f"   Physics integration: ENABLED")
+        
+        expert_obs_list = []
+        env_ids = torch.tensor([0], device=self.device)
+        
+        # Initialize to starting pose
+        initial_state = self.get_trajectory_state(start_timestep)
+        if initial_state is not None:
+            self.apply_trajectory_state(initial_state, env_ids)
+            # Settle physics
+            for _ in range(3):
+                self.genesis_env.scene.step()
+            self.genesis_env._update_robot_state()
+        
+        # Collect with progress tracking
+        for step in range(actual_num_timesteps):
+            trajectory_idx = start_timestep + step
+            
+            if trajectory_idx >= self.trajectory_length:
+                break
+            
+            # Apply trajectory state with physics
+            state_data = self.get_trajectory_state(trajectory_idx)
+            if state_data is not None:
+                self.apply_trajectory_state(state_data, env_ids)
+                
+                # Collect at specified interval
+                if step % step_interval == 0:
+                    obs = self.genesis_env._get_observations()
+                    expert_obs_list.append(obs[0])
+            
+            # Progress updates
+            if step % 1000 == 0:
+                progress = (step / actual_num_timesteps) * 100
+                print(f"   Progress: {progress:.1f}% ({step}/{actual_num_timesteps})")
+        
+        if not expert_obs_list:
+            print("❌ Failed to collect expert observations")
+            return None
+        
+        expert_observations = torch.stack(expert_obs_list, dim=0)
+        print(f"✅ Generated {expert_observations.shape[0]} physics-based expert observations")
+        
+        return expert_observations
+    
+    def clear_cache(self, dataset_name: str = None):
+        """
+        Clear cached expert observations
+        
+        Args:
+            dataset_name: Clear specific dataset cache (None = clear all)
+        """
+        if dataset_name:
+            pattern = f"expert_obs_{dataset_name}_*.pt"
+        else:
+            pattern = "expert_obs_*.pt"
+        
+        cache_files = list(self.cache_dir.glob(pattern))
+        
+        for cache_file in cache_files:
+            try:
+                cache_file.unlink()
+                print(f"🗑️  Cleared cache: {cache_file.name}")
+            except Exception as e:
+                print(f"⚠️  Failed to clear {cache_file.name}: {e}")
+        
+        if cache_files:
+            print(f"✅ Cleared {len(cache_files)} cache files")
+        else:
+            print(f"ℹ️  No cache files found matching pattern: {pattern}")
     
     @property
     def trajectory_length(self):

@@ -55,7 +55,7 @@ class GAILConfig:
     disc_ent_coef: float = 0.01  # Entropy regularization to prevent discriminator overconfidence
     
     # Dynamic training schedule parameters
-    use_dynamic_schedule: bool = True  # Enable adaptive discriminator training
+    use_dynamic_schedule: bool = False  # Enable adaptive discriminator training
     disc_expert_threshold_high: float = 0.93  # Reduce disc training when expert accuracy > this
     disc_expert_threshold_low: float = 0.85   # Increase disc training when expert accuracy < this
     disc_policy_threshold_low: float = 0.25   # Alert when policy accuracy < this
@@ -167,7 +167,7 @@ class GAILGenesisTrainer:
     
     def load_expert_data(self) -> bool:
         """
-        Load expert trajectory data and generate observations
+        Load expert trajectory data using cached physics-based observations
         
         Returns:
             bool: Success status
@@ -178,66 +178,22 @@ class GAILGenesisTrainer:
             print("❌ No trajectory loaded in data bridge")
             return False
         
-        # Generate expert observations - USE ALL TIMESTEPS like LocoMujoco
-        expert_obs_list = []
         trajectory_length = self.data_bridge.trajectory_length
         
-        # Use every timestep to match LocoMujoco's approach (no subsampling)
-        # This prevents discriminator overfitting on small dataset
-        print(f"   Generating expert observations from ALL {trajectory_length} timesteps...")
-        print(f"   (This matches LocoMujoco's dataset generation strategy)")
+        # Use cached expert observations with physics integration (all timesteps)
+        self.expert_observations = self.data_bridge.get_expert_observations_cached(
+            dataset_name="walk",
+            num_timesteps=None,  # Use all timesteps by default
+            start_timestep=0,    # Start from beginning  
+            step_interval=1,     # Every timestep
+            force_reload=False   # Use cache if available
+        )
         
-        # Use first environment for expert observation generation
-        env_ids = torch.tensor([0], device=self.device)
-        
-        # Process in batches for efficiency
-        batch_size = 1000  # Process 1000 timesteps at once
-        print(f"   Processing in batches of {batch_size} timesteps...")
-        
-        for start_idx in range(0, trajectory_length, batch_size):
-            end_idx = min(start_idx + batch_size, trajectory_length)
-            current_batch_size = end_idx - start_idx
-            
-            # Get batch of trajectory states
-            batch_data = self.data_bridge.get_trajectory_batch(start_idx, current_batch_size)
-            
-            if batch_data is None:
-                continue
-            
-            # Apply batch to Genesis environment (one at a time for now)
-            for i in range(current_batch_size):
-                # Extract single state from batch
-                single_state = {
-                    'dof_pos': batch_data['dof_pos'][i],
-                    'dof_vel': batch_data['dof_vel'][i], 
-                    'root_pos': batch_data['root_pos'][i],
-                    'root_quat': batch_data['root_quat'][i],
-                    'root_lin_vel': batch_data['root_lin_vel'][i],
-                    'root_ang_vel': batch_data['root_ang_vel'][i]
-                }
-                
-                # Apply state to Genesis environment
-                self.data_bridge.apply_trajectory_state(single_state, env_ids)
-                
-                # Get observation from environment
-                obs = self.genesis_env._get_observations()
-                expert_obs_list.append(obs[0])  # First environment only
-            
-            # Progress indicator
-            if (start_idx // batch_size) % 10 == 0:
-                progress = (start_idx / trajectory_length) * 100
-                print(f"   Progress: {progress:.1f}% ({start_idx}/{trajectory_length})")
-        
-        if not expert_obs_list:
-            print("❌ Failed to generate expert observations")
+        if self.expert_observations is None:
+            print("❌ Failed to load expert observations")
             return False
         
-        # Stack all expert observations
-        self.expert_observations = torch.stack(expert_obs_list, dim=0)
-        
-        print(f"   ✅ Generated {self.expert_observations.shape[0]} expert observations")
         print(f"   ✅ Expert observation shape: {self.expert_observations.shape}")
-        
         return True
     
     def sample_expert_batch(self, batch_size: int) -> torch.Tensor:
