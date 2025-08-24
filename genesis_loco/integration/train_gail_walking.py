@@ -158,9 +158,9 @@ def main():
     parser.add_argument('--disc_minibatch_size', type=int, default=1024, help='Discriminator batch size')
     parser.add_argument('--num_minibatches', type=int, default=16, help='Number of PPO minibatches')
     
-    # Learning rates
-    parser.add_argument('--lr', type=float, default=1e-4, help='PPO learning rate')
-    parser.add_argument('--disc_lr', type=float, default=5e-5, help='Discriminator learning rate')
+    # Learning rates - Reduced for better stability
+    parser.add_argument('--lr', type=float, default=3e-5, help='PPO learning rate')
+    parser.add_argument('--disc_lr', type=float, default=1e-5, help='Discriminator learning rate')
     
     # Reward mixing
     parser.add_argument('--proportion_env_reward', type=float, default=0.0, 
@@ -174,6 +174,10 @@ def main():
     # Environment settings
     parser.add_argument('--show_viewer', action='store_true', help='Show Genesis viewer')
     parser.add_argument('--trajectory', type=str, default='walk', help='Expert trajectory to use')
+    
+    # Expert data loading
+    parser.add_argument('--use_physics_data', action='store_true', 
+                       help='Use physics-aware expert data (slow but accurate). Default: fast traditional approach')
     
     # Testing
     parser.add_argument('--test_only', action='store_true', help='Run tests only')
@@ -192,6 +196,7 @@ def main():
     print(f"Total timesteps: {args.total_timesteps:,}")
     print(f"Environments: {args.num_envs}")
     print(f"Trajectory: {args.trajectory}")
+    print(f"Expert data approach: {'Physics-aware' if args.use_physics_data else 'Traditional (fast)'}")
     print(f"Proportion env reward: {args.proportion_env_reward}")
     
     try:
@@ -234,7 +239,7 @@ def main():
             print("6. Running tests...")
             
             # Test expert data loading
-            success = trainer.load_expert_data()
+            success = trainer.load_expert_data(use_physics=args.use_physics_data)
             if not success:
                 raise RuntimeError("Failed to load expert data")
             print(f"   ✅ Expert data loaded: {trainer.expert_observations.shape[0]} samples")
@@ -253,7 +258,7 @@ def main():
         print("6. Starting training...")
         start_time = time.time()
         
-        training_metrics = trainer.train(save_dir=args.save_dir)
+        training_metrics = trainer.train(save_dir=args.save_dir, use_physics_data=args.use_physics_data)
         
         training_time = time.time() - start_time
         

@@ -6,7 +6,7 @@
 <!--This model parameters (e.g. contact detection etc.) haven't been optimized.-->
 <mujoco model="GZ_DW_sub01">
 
-  <include file="/home/ez/Documents/Genesis/genesis_loco/common/scene.xml"/>
+  <!-- <include file="/home/ez/Documents/Genesis/genesis_loco/common/scene.xml"/> -->
   <include file="/home/ez/Documents/Genesis/genesis_loco/common/mimic_sites.xml"/>
 
   <compiler inertiafromgeom="auto" angle="radian" balanceinertia="true" boundmass="0.001" boundinertia="0.001">
@@ -327,7 +327,7 @@
     <motor name="mot_subtalar_angle_l" gear="50" joint="subtalar_angle_l"></motor>
     <motor name="mot_mtp_angle_l" gear="50" joint="mtp_angle_l"></motor>
   </actuator>
-  <equality>
+  <!-- <equality>
     <joint name="subtalar_angle_r_constraint" active="true" joint1="subtalar_angle_r" polycoef="       0        0        0        0        0"></joint>
     <joint name="mtp_angle_r_constraint" active="true" joint1="mtp_angle_r" polycoef="       0        0        0        0        0"></joint>
     <joint name="subtalar_angle_l_constraint" active="true" joint1="subtalar_angle_l" polycoef="       0        0        0        0        0"></joint>
@@ -336,5 +336,5 @@
     <joint name="wrist_dev_r_constraint" active="true" joint1="wrist_dev_r" polycoef="       0        0        0        0        0"></joint>
     <joint name="wrist_flex_l_constraint" active="true" joint1="wrist_flex_l" polycoef="       0        0        0        0        0"></joint>
     <joint name="wrist_dev_l_constraint" active="true" joint1="wrist_dev_l" polycoef="       0        0        0        0        0"></joint>
-  </equality>
+  </equality> -->
 </mujoco>

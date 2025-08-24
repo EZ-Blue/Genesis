@@ -194,16 +194,18 @@ class TrajectoryFollower:
                             controllable_target_vel = target_dof_vel[0]  # Already controllable DOF order
                             smooth_velocity = controllable_target_vel * 0.5  # Conservative initial velocity
                         # target_dof_pos is already in controllable DOF order from data_bridge  
-                        self.env.robot.set_dofs_position(
-                            target_dof_pos, 
-                            dofs_idx_local=controllable_dof_indices, 
-                            envs_idx=env_ids, 
-                            zero_velocity=False
-                        )
+                        # self.env.robot.set_dofs_position(
+                        #     target_dof_pos, 
+                        #     dofs_idx_local=controllable_dof_indices, 
+                        #     envs_idx=env_ids, 
+                        #     zero_velocity=False
+                        # )
                         
-                        # Set root pose with drift prevention
-                        self.env.robot.set_pos(target_root_pos, envs_idx=env_ids, zero_velocity=False)
-                        self.env.robot.set_quat(target_root_quat, envs_idx=env_ids, zero_velocity=False)
+                        # # Set root pose with drift prevention
+                        # self.env.robot.set_pos(target_root_pos, envs_idx=env_ids, zero_velocity=False)
+                        # self.env.robot.set_quat(target_root_quat, envs_idx=env_ids, zero_velocity=False)
+
+                        self.data_bridge.apply_trajectory_state(traj_state)
                         
                         # Smooth velocity setting every few steps
                         if step_count % 5 == 0:  # More frequent for stability

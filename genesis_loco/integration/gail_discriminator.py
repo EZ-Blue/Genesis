@@ -52,61 +52,113 @@ class RunningMeanStd(nn.Module):
         self.count.copy_(new_count)
 
 
+# class GAILDiscriminator(nn.Module):
+#     """
+#     GAIL Discriminator Network
+    
+#     Adapted from LocoMujoco's FullyConnectedNet discriminator architecture.
+#     Uses binary classification to distinguish expert from policy observations.
+#     """
+    
+#     def __init__(self, 
+#                  input_dim: int,
+#                  hidden_layers: list = [512, 256],
+#                  activation: str = 'tanh',
+#                  use_running_norm: bool = True):
+#         super().__init__()
+        
+#         self.use_running_norm = use_running_norm
+        
+#         # Input normalization (following LocoMujoco)
+#         if use_running_norm:
+#             self.input_norm = RunningMeanStd(input_dim)
+        
+#         # Build network
+#         layers = []
+#         prev_dim = input_dim
+        
+#         for hidden_dim in hidden_layers:
+#             layers.extend([
+#                 nn.Linear(prev_dim, hidden_dim),
+#                 nn.Tanh() if activation == 'tanh' else nn.ReLU()
+#             ])
+#             prev_dim = hidden_dim
+        
+#         # Output layer - single logit for binary classification
+#         layers.append(nn.Linear(prev_dim, 1))
+#         self.network = nn.Sequential(*layers)
+        
+#         # Initialize weights
+#         self._init_weights()
+    
+    # def _init_weights(self):
+    #     """Initialize weights using Xavier uniform"""
+    #     for module in self.modules():
+    #         if isinstance(module, nn.Linear):
+    #             nn.init.xavier_uniform_(module.weight)
+    #             nn.init.zeros_(module.bias)
+    
+#     def forward(self, obs: torch.Tensor, update_stats: bool = True) -> torch.Tensor:
+#         """Forward pass through discriminator"""
+#         x = obs
+        
+#         # Apply normalization if enabled
+#         if self.use_running_norm:
+#             x = self.input_norm(x, update_stats=update_stats)
+        
+#         # Forward through network
+#         return self.network(x).squeeze(-1)
+
 class GAILDiscriminator(nn.Module):
-    """
-    GAIL Discriminator Network
-    
-    Adapted from LocoMujoco's FullyConnectedNet discriminator architecture.
-    Uses binary classification to distinguish expert from policy observations.
-    """
-    
     def __init__(self, 
-                 input_dim: int,
-                 hidden_layers: list = [512, 256],
-                 activation: str = 'tanh',
-                 use_running_norm: bool = True):
+                obs_dim: int,
+                action_dim: int,  # Add action dimension
+                hidden_layers: list = [512, 256],
+                activation: str = 'tanh',
+                use_running_norm: bool = True):
         super().__init__()
-        
+
+        input_dim = obs_dim + action_dim  # Concatenate obs and actions
+        self.obs_dim = obs_dim
+        self.action_dim = action_dim
         self.use_running_norm = use_running_norm
-        
-        # Input normalization (following LocoMujoco)
+
+        # Input normalization for concatenated obs-action pairs
         if use_running_norm:
             self.input_norm = RunningMeanStd(input_dim)
-        
-        # Build network
+
+        # Build network for obs-action pairs
         layers = []
         prev_dim = input_dim
-        
+
         for hidden_dim in hidden_layers:
             layers.extend([
                 nn.Linear(prev_dim, hidden_dim),
                 nn.Tanh() if activation == 'tanh' else nn.ReLU()
             ])
             prev_dim = hidden_dim
-        
-        # Output layer - single logit for binary classification
+
         layers.append(nn.Linear(prev_dim, 1))
         self.network = nn.Sequential(*layers)
-        
-        # Initialize weights
+
         self._init_weights()
-    
+
     def _init_weights(self):
         """Initialize weights using Xavier uniform"""
         for module in self.modules():
             if isinstance(module, nn.Linear):
                 nn.init.xavier_uniform_(module.weight)
                 nn.init.zeros_(module.bias)
-    
-    def forward(self, obs: torch.Tensor, update_stats: bool = True) -> torch.Tensor:
-        """Forward pass through discriminator"""
-        x = obs
-        
+
+    def forward(self, obs: torch.Tensor, actions: torch.Tensor, update_stats: bool = True) -> torch.Tensor:
+        """Forward pass with observation-action pairs"""
+        # Concatenate observations and actions
+        x = torch.cat([obs, actions], dim=-1)
+
         # Apply normalization if enabled
         if self.use_running_norm:
             x = self.input_norm(x, update_stats=update_stats)
-        
-        # Forward through network
+
         return self.network(x).squeeze(-1)
 
 
@@ -124,6 +176,7 @@ class GAILTrainer:
                  discriminator: GAILDiscriminator,
                  learning_rate: float = 5e-5,
                  entropy_coef: float = 0.0,
+                 max_grad_norm: float = 0.5,
                  device: torch.device = None):
         
         if device is None:
@@ -133,56 +186,68 @@ class GAILTrainer:
         self.device = device
         self.entropy_coef = entropy_coef
         self.optimizer = optim.AdamW(discriminator.parameters(), lr=learning_rate, eps=1e-5)
-        self.max_grad_norm = learning_rate  # Use learning rate for grad clipping like LocoMujoco
+        self.max_grad_norm = max_grad_norm  # Proper gradient clipping value
         
         # Metrics tracking
         self.last_metrics = {}
     
-    def compute_gail_rewards(self, obs: torch.Tensor) -> torch.Tensor:
-        """
-        Compute GAIL rewards from discriminator scores
+    # def compute_gail_rewards(self, obs: torch.Tensor) -> torch.Tensor:
+    #     """
+    #     Compute GAIL rewards from discriminator scores
         
-        Following LocoMujoco: reward = -log(1 - sigmoid(logits) + eps)
-        Higher reward when discriminator thinks observation is from expert
+    #     Following LocoMujoco: reward = -log(1 - sigmoid(logits) + eps)
+    #     Higher reward when discriminator thinks observation is from expert
+    #     """
+    #     self.discriminator.eval()
+    #     with torch.no_grad():
+    #         logits = self.discriminator(obs, update_stats=False)
+    #         # Convert logits to probabilities (probability of being expert)
+    #         probs = torch.sigmoid(logits)
+    #         # GAIL reward: -log(1 - p_expert + eps)
+    #         # Higher when discriminator thinks it's expert-like
+    #         rewards = -torch.log(1 - probs + 1e-6)
+    #     return rewards
+
+    def compute_gail_rewards(self, obs: torch.Tensor, actions: torch.Tensor) -> torch.Tensor:
+        """
+        Compute GAIL rewards from obs-action pairs
+        
+        Standard GAIL reward: r = log(D(s,a)) - log(1 - D(s,a))
+        Where D(s,a) is the discriminator output (probability of being expert)
         """
         self.discriminator.eval()
         with torch.no_grad():
-            logits = self.discriminator(obs, update_stats=False)
-            # Convert logits to probabilities (probability of being expert)
+            logits = self.discriminator(obs, actions, update_stats=False)
+            # Clamp logits to prevent extreme values
+            logits = torch.clamp(logits, min=-10.0, max=10.0)
             probs = torch.sigmoid(logits)
-            # GAIL reward: -log(1 - p_expert + eps)
-            # Higher when discriminator thinks it's expert-like
-            rewards = -torch.log(1 - probs + 1e-6)
+            
+            # Standard GAIL reward: log(D) - log(1-D)
+            # Equivalent to: logits (but more numerically stable)
+            rewards = logits.squeeze(-1)
+            
+            # Alternative stable formulation:
+            # rewards = torch.log(probs + 1e-8) - torch.log(1 - probs + 1e-8)
+            
         return rewards
     
     def train_discriminator(self, 
-                          expert_obs: torch.Tensor,
-                          policy_obs: torch.Tensor) -> Dict[str, float]:
-        """
-        Single discriminator training step
-        
-        Following LocoMujoco's approach:
-        - Expert observations labeled as 1
-        - Policy observations labeled as 0
-        - Binary cross-entropy loss with entropy regularization
-        
-        Args:
-            expert_obs: Expert observations [batch_size, obs_dim]
-            policy_obs: Policy observations [batch_size, obs_dim]
-            
-        Returns:
-            Training metrics
-        """
+                        expert_obs: torch.Tensor,
+                        expert_actions: torch.Tensor,
+                        policy_obs: torch.Tensor,
+                        policy_actions: torch.Tensor) -> Dict[str, float]:
+        """Train discriminator on obs-action pairs"""
         self.discriminator.train()
-        
-        # Combine data and create targets (following LocoMujoco)
-        all_obs = torch.cat([policy_obs, expert_obs], dim=0)  # Policy first, then expert
-        policy_targets = torch.zeros(policy_obs.shape[0], device=self.device)  # Policy = 0
-        expert_targets = torch.ones(expert_obs.shape[0], device=self.device)   # Expert = 1
+
+        # Combine data
+        all_obs = torch.cat([policy_obs, expert_obs], dim=0)
+        all_actions = torch.cat([policy_actions, expert_actions], dim=0)
+        policy_targets = torch.zeros(policy_obs.shape[0], device=self.device)
+        expert_targets = torch.ones(expert_obs.shape[0], device=self.device)
         all_targets = torch.cat([policy_targets, expert_targets], dim=0)
-        
-        # Forward pass
-        logits = self.discriminator(all_obs, update_stats=True)
+
+        # Forward pass with obs-action pairs
+        logits = self.discriminator(all_obs, all_actions, update_stats=True)
         
         # Binary cross-entropy loss (following LocoMujoco)
         log_p = F.logsigmoid(logits)

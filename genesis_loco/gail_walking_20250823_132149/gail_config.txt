@@ -1,0 +1,40 @@
+GAIL Training Configuration
+==============================
+num_envs: 512
+num_steps: 20
+episode_length_s: 8.0
+dt: 0.01
+total_timesteps: 5000000
+update_epochs: 4
+n_disc_epochs: 5
+disc_minibatch_size: 1024
+num_minibatches: 16
+train_disc_interval: 1
+lr: 0.0001
+gamma: 0.99
+gae_lambda: 0.95
+clip_eps: 0.2
+value_coef: 0.5
+entropy_coef: 0.0
+max_grad_norm: 0.5
+weight_decay: 0.0
+disc_lr: 5e-05
+disc_ent_coef: 0.01
+use_dynamic_schedule: False
+disc_expert_threshold_high: 0.93
+disc_expert_threshold_low: 0.85
+disc_policy_threshold_low: 0.25
+n_disc_epochs_min: 3
+n_disc_epochs_max: 15
+hidden_layers: [256, 128]
+activation: tanh
+init_std: 0.125
+learnable_std: False
+proportion_env_reward: 0.0
+log_interval: 10
+save_interval: 100
+num_updates: 488
+minibatch_size: 640
+
+Training time: 1811.3s
+Final episode return: 25.736

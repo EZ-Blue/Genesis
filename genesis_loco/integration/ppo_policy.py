@@ -162,30 +162,46 @@ class PPOActorCritic(nn.Module):
         
         return action_distribution, value
     
-    def get_action_and_value(self, obs: torch.Tensor, action: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """
-        Get action, log probability, entropy, and value
+    # def get_action_and_value(self, obs: torch.Tensor, action: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    #     """
+    #     Get action, log probability, entropy, and value
         
-        Args:
-            obs: Observations
-            action: Optional pre-computed action
+    #     Args:
+    #         obs: Observations
+    #         action: Optional pre-computed action
             
-        Returns:
-            action: Sampled or provided action
-            log_prob: Log probability of action
-            entropy: Entropy of action distribution
-            value: State value estimate
-        """
-        action_dist, value = self.forward(obs)
+    #     Returns:
+    #         action: Sampled or provided action
+    #         log_prob: Log probability of action
+    #         entropy: Entropy of action distribution
+    #         value: State value estimate
+    #     """
+    #     action_dist, value = self.forward(obs)
         
-        if action is None:
-            action = action_dist.sample()
+    #     if action is None:
+    #         action = action_dist.sample()
         
-        log_prob = action_dist.log_prob(action).sum(-1)
-        entropy = action_dist.entropy().sum(-1)
+    #     log_prob = action_dist.log_prob(action).sum(-1)
+    #     entropy = action_dist.entropy().sum(-1)
         
-        return action, log_prob, entropy, value
+    #     return action, log_prob, entropy, value
 
+    def get_action_and_value(self, obs: torch.Tensor, action: Optional[torch.Tensor] = None):
+          """
+          Modified to output target joint positions instead of continuous actions
+          """
+          action_dist, value = self.forward(obs)
+
+          if action is None:
+              # Sample target joint positions
+              action = action_dist.sample()
+              # Clamp to reasonable joint limits (similar to behavior cloning)
+              action = torch.clamp(action, -3.14, 3.14)  # Adjust limits as needed
+
+          log_prob = action_dist.log_prob(action).sum(-1)
+          entropy = action_dist.entropy().sum(-1)
+
+          return action, log_prob, entropy, value
 
 class PPOTrainer:
     """

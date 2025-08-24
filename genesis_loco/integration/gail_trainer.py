@@ -14,6 +14,7 @@ from typing import Dict, List, Tuple, Optional
 import time
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from gail_discriminator import GAILDiscriminator, GAILTrainer
 from ppo_policy import PPOActorCritic, PPOTrainer
@@ -41,7 +42,7 @@ class GAILConfig:
     train_disc_interval: int = 1  # Train discriminator every nth update (1=every update like LocoMujoco)
     
     # PPO parameters
-    lr: float = 1e-4  # LocoMujoco default policy learning rate
+    lr: float = 3e-5  # Reduced policy learning rate for stability
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_eps: float = 0.2  # LocoMujoco default clip epsilon
@@ -51,7 +52,7 @@ class GAILConfig:
     weight_decay: float = 0.0
     
     # Discriminator parameters
-    disc_lr: float = 5e-5  # LocoMujoco default discriminator learning rate
+    disc_lr: float = 1e-5  # Reduced discriminator learning rate for stability
     disc_ent_coef: float = 0.01  # Entropy regularization to prevent discriminator overconfidence
     
     # Dynamic training schedule parameters
@@ -118,7 +119,8 @@ class GAILGenesisTrainer:
         
         # Initialize discriminator
         self.discriminator = GAILDiscriminator(
-            input_dim=genesis_env.num_observations,
+            obs_dim=genesis_env.num_observations,
+            action_dim=genesis_env.num_actions,
             hidden_layers=config.hidden_layers,
             activation=config.activation,
             use_running_norm=True
@@ -142,6 +144,7 @@ class GAILGenesisTrainer:
             discriminator=self.discriminator,
             learning_rate=config.disc_lr,
             entropy_coef=config.disc_ent_coef,
+            max_grad_norm=config.max_grad_norm,  # Use same grad norm as PPO
             device=device
         )
         
@@ -165,45 +168,207 @@ class GAILGenesisTrainer:
         print(f"   - Discriminator parameters: {sum(p.numel() for p in self.discriminator.parameters())}")
         print(f"   - Device: {device}")
     
-    def load_expert_data(self) -> bool:
-        """
-        Load expert trajectory data using cached physics-based observations
+    # def load_expert_data(self) -> bool:
+    #     """
+    #     Load expert trajectory data using cached physics-based observations
         
-        Returns:
-            bool: Success status
-        """
-        print("Loading expert trajectory data...")
+    #     Returns:
+    #         bool: Success status
+    #     """
+    #     print("Loading expert trajectory data...")
         
+    #     if self.data_bridge.loco_trajectory is None:
+    #         print("❌ No trajectory loaded in data bridge")
+    #         return False
+        
+    #     trajectory_length = self.data_bridge.trajectory_length
+        
+    #     # Use cached expert observations with physics integration (all timesteps)
+    #     self.expert_observations = self.data_bridge.get_expert_observations_cached(
+    #         dataset_name="walk",
+    #         num_timesteps=None,  # Use all timesteps by default
+    #         start_timestep=0,    # Start from beginning  
+    #         step_interval=1,     # Every timestep
+    #         force_reload=False   # Use cache if available
+    #     )
+        
+    #     if self.expert_observations is None:
+    #         print("❌ Failed to load expert observations")
+    #         return False
+        
+    #     print(f"   ✅ Expert observation shape: {self.expert_observations.shape}")
+    #     return True
+
+    def load_expert_data(self, use_physics: bool = True) -> bool:
+        """
+        Load expert data as (obs, next_target) pairs with optional physics integration
+        
+        Args:
+            use_physics: If True, use physics-aware approach (slow but accurate)
+                        If False, use fast traditional approach (raw trajectory data)
+        """
+        from pathlib import Path
+        
+        # Choose cache file based on approach
+        cache_suffix = "physics" if use_physics else "raw"
+        cache_file = Path(f"./gail_expert_cache/expert_obs_actions_{cache_suffix}.pt")
+        cache_file.parent.mkdir(exist_ok=True)
+        
+        # Try loading from cache first
+        if cache_file.exists():
+            print(f"📦 Loading cached expert data ({'physics-aware' if use_physics else 'traditional'})...")
+            try:
+                cached_data = torch.load(cache_file, map_location=self.device)
+                self.expert_observations = cached_data['expert_observations']
+                self.expert_actions = cached_data['expert_actions']
+                print(f"✅ Loaded from cache: obs={self.expert_observations.shape}, actions={self.expert_actions.shape}")
+                return True
+            except Exception as e:
+                print(f"⚠️ Cache loading failed ({e}), regenerating...")
+        
+        if use_physics:
+            return self._load_expert_data_physics_aware(cache_file)
+        else:
+            return self._load_expert_data_traditional(cache_file)
+    
+    def _load_expert_data_physics_aware(self, cache_file: Path) -> bool:
+        """Load expert data with full physics integration (slow but accurate)"""
+        print("🔄 Generating physics-aware expert observation-action pairs...")
+        print("   This will take ~30-60 minutes but will be cached for future use...")
+
         if self.data_bridge.loco_trajectory is None:
             print("❌ No trajectory loaded in data bridge")
             return False
-        
+
+        expert_obs_list = []
+        expert_actions_list = []
+        env_ids = torch.tensor([0], device=self.device)
         trajectory_length = self.data_bridge.trajectory_length
-        
-        # Use cached expert observations with physics integration (all timesteps)
-        self.expert_observations = self.data_bridge.get_expert_observations_cached(
-            dataset_name="walk",
-            num_timesteps=None,  # Use all timesteps by default
-            start_timestep=0,    # Start from beginning  
-            step_interval=1,     # Every timestep
-            force_reload=False   # Use cache if available
-        )
-        
-        if self.expert_observations is None:
-            print("❌ Failed to load expert observations")
-            return False
-        
-        print(f"   ✅ Expert observation shape: {self.expert_observations.shape}")
+
+        for step in range(trajectory_length - 1):
+            current_timestep = step
+            next_timestep = step + 1
+
+            # Apply current state WITH physics
+            current_state = self.data_bridge.get_trajectory_state(current_timestep)
+            if current_state is None:
+                continue
+
+            self.data_bridge.apply_trajectory_state(current_state, env_ids)
+            current_obs = self.genesis_env._get_observations()[0]
+
+            # Apply next state WITH physics and get target positions
+            next_state = self.data_bridge.get_trajectory_state(next_timestep)
+            if next_state is None:
+                continue
+
+            self.data_bridge.apply_trajectory_state(next_state, env_ids)
+            target_positions = self.genesis_env.robot.get_dofs_position(
+                dofs_idx_local=self.genesis_env.motors_dof_idx
+            )[0]
+
+            expert_obs_list.append(current_obs.cpu())
+            expert_actions_list.append(target_positions.cpu())
+
+            if step % 500 == 0:
+                print(f"   Progress: {(step / (trajectory_length - 1)) * 100:.1f}%")
+
+        self.expert_observations = torch.stack(expert_obs_list, dim=0).to(self.device)
+        self.expert_actions = torch.stack(expert_actions_list, dim=0).to(self.device)
+
+        self._save_expert_data_cache(cache_file, trajectory_length)
         return True
     
-    def sample_expert_batch(self, batch_size: int) -> torch.Tensor:
-        """Sample random batch of expert observations"""
-        if self.expert_observations is None:
-            raise RuntimeError("Expert data not loaded. Call load_expert_data() first.")
+    def _load_expert_data_traditional(self, cache_file: Path) -> bool:
+        """Load expert data using raw trajectory positions (fast traditional approach)"""
+        print("⚡ Generating traditional expert observation-action pairs...")
+        print("   This will take ~2-5 minutes and will be cached for future use...")
+
+        if self.data_bridge.loco_trajectory is None:
+            print("❌ No trajectory loaded in data bridge")
+            return False
+
+        expert_obs_list = []
+        expert_actions_list = []
+        env_ids = torch.tensor([0], device=self.device)
+        trajectory_length = self.data_bridge.trajectory_length
+
+        for step in range(trajectory_length - 1):
+            current_timestep = step
+            next_timestep = step + 1
+
+            # Get current state and apply WITHOUT physics stepping
+            current_state = self.data_bridge.get_trajectory_state(current_timestep)
+            if current_state is None:
+                continue
+
+            # Apply state without physics for observation generation
+            self._apply_state_no_physics(current_state, env_ids)
+            current_obs = self.genesis_env._get_observations()[0]
+
+            # Get target from raw trajectory data (no physics stepping needed)
+            next_state = self.data_bridge.get_trajectory_state(next_timestep)
+            if next_state is None:
+                continue
+            
+            target_positions = next_state['dof_pos']  # Direct from trajectory
+
+            expert_obs_list.append(current_obs.cpu())
+            expert_actions_list.append(target_positions.cpu())
+
+            if step % 1000 == 0:  # Less frequent updates since it's faster
+                print(f"   Progress: {(step / (trajectory_length - 1)) * 100:.1f}%")
+
+        self.expert_observations = torch.stack(expert_obs_list, dim=0).to(self.device)
+        self.expert_actions = torch.stack(expert_actions_list, dim=0).to(self.device)
+
+        self._save_expert_data_cache(cache_file, trajectory_length)
+        return True
+    
+    def _apply_state_no_physics(self, state_data, env_ids):
+        """Apply trajectory state without physics stepping (for fast loading)"""
+        num_envs = len(env_ids)
         
-        n_expert = self.expert_observations.shape[0]
-        indices = torch.randint(0, n_expert, (batch_size,), device=self.device)
-        return self.expert_observations[indices]
+        # Prepare state tensors
+        dof_pos = state_data['dof_pos'].unsqueeze(0).repeat(num_envs, 1)
+        root_pos = state_data['root_pos'].unsqueeze(0).repeat(num_envs, 1)
+        root_quat = state_data['root_quat'].unsqueeze(0).repeat(num_envs, 1)
+        
+        # Apply positions directly without physics stepping
+        self.genesis_env.robot.set_dofs_position(
+            dof_pos, 
+            dofs_idx_local=self.genesis_env.motors_dof_idx, 
+            envs_idx=env_ids
+        )
+        self.genesis_env.robot.set_pos(root_pos, envs_idx=env_ids)
+        self.genesis_env.robot.set_quat(root_quat, envs_idx=env_ids)
+        
+        # Update state buffers only (no physics stepping)
+        self.genesis_env._update_robot_state()
+    
+    def _save_expert_data_cache(self, cache_file: Path, trajectory_length: int):
+        """Save expert data to cache file"""
+        print("💾 Caching expert data for future use...")
+        cache_data = {
+            'expert_observations': self.expert_observations.cpu(),
+            'expert_actions': self.expert_actions.cpu(),
+            'trajectory_length': trajectory_length,
+            'obs_shape': self.expert_observations.shape,
+            'action_shape': self.expert_actions.shape
+        }
+        torch.save(cache_data, cache_file)
+        print(f"✅ Expert data cached to {cache_file}")
+        print(f"✅ Expert data shape: obs={self.expert_observations.shape}, actions={self.expert_actions.shape}")
+    
+    def sample_expert_batch(self, batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
+      """Sample batch of expert (observation, action) pairs"""
+      if self.expert_observations is None or self.expert_actions is None:
+          raise RuntimeError("Expert data not loaded")
+
+      n_expert = self.expert_observations.shape[0]
+      indices = torch.randint(0, n_expert, (batch_size,), device=self.device)
+
+      return self.expert_observations[indices], self.expert_actions[indices]
     
     def get_adaptive_disc_epochs(self, expert_output: float, policy_output: float) -> int:
         """
@@ -250,21 +415,21 @@ class GAILGenesisTrainer:
         
         for step in range(self.config.num_steps):
             observations[:, step] = obs
-            
-            # Sample action
+
+            # Sample action (target joint positions)
             with torch.no_grad():
                 action, log_prob, _, value = self.policy.get_action_and_value(obs)
-            
+
             actions[:, step] = action
             log_probs[:, step] = log_prob
             values[:, step] = value
-            
-            # Step environment
+
+            # Step environment with target positions
             obs, env_reward, reset_buf, info = self.genesis_env.step(action)
             done = reset_buf
-            
-            # Compute GAIL rewards
-            gail_reward = self.gail_trainer.compute_gail_rewards(obs)
+
+            # Compute GAIL rewards using obs-action pairs
+            gail_reward = self.gail_trainer.compute_gail_rewards(observations[:, step], action)
             
             # Mix rewards (following LocoMujoco)
             mixed_reward = (self.config.proportion_env_reward * env_reward + 
@@ -324,21 +489,37 @@ class GAILGenesisTrainer:
                 
             disc_metrics_list = []
             for _ in range(adaptive_epochs):
-                # Sample policy and expert batches
-                policy_batch = observations.reshape(-1, observations.shape[-1])
-                policy_indices = torch.randint(0, policy_batch.shape[0], (self.config.disc_minibatch_size,), device=self.device)
-                policy_sample = policy_batch[policy_indices]
-                
-                expert_sample = self.sample_expert_batch(self.config.disc_minibatch_size)
-                
-                # Train discriminator
-                disc_metrics = self.gail_trainer.train_discriminator(expert_sample, policy_sample)
-                disc_metrics_list.append(disc_metrics)
+                # Sample policy obs-action pairs
+                policy_obs_batch = observations.reshape(-1, observations.shape[-1])
+                policy_actions_batch = actions.reshape(-1, actions.shape[-1])
+                indices = torch.randint(0, policy_obs_batch.shape[0], (self.config.disc_minibatch_size,))
+                policy_obs_sample = policy_obs_batch[indices]
+                policy_actions_sample = policy_actions_batch[indices]
+
+                # Sample expert obs-action pairs
+                expert_obs_sample, expert_actions_sample = self.sample_expert_batch(self.config.disc_minibatch_size)
+
+                # Train discriminator on obs-action pairs
+                disc_metrics = self.gail_trainer.train_discriminator(
+                    expert_obs_sample, expert_actions_sample,
+                    policy_obs_sample, policy_actions_sample
+                )
+                disc_metrics_list.append(disc_metrics)  # FIX: Add missing append
             
-            # Average discriminator metrics
-            avg_disc_metrics = {}
-            for key in disc_metrics_list[0].keys():
-                avg_disc_metrics[key] = np.mean([m[key] for m in disc_metrics_list])
+            # Average discriminator metrics (handle empty list case)
+            if disc_metrics_list:
+                avg_disc_metrics = {}
+                for key in disc_metrics_list[0].keys():
+                    avg_disc_metrics[key] = np.mean([m[key] for m in disc_metrics_list])
+            else:
+                # No discriminator training occurred
+                avg_disc_metrics = {
+                    'discriminator_loss': 0.0,
+                    'policy_accuracy': 0.5,
+                    'expert_accuracy': 0.5,
+                    'discriminator_output_policy': 0.5,
+                    'discriminator_output_expert': 0.5
+                }
         else:
             # Skip discriminator training, use last known metrics
             avg_disc_metrics = self.gail_trainer.last_metrics.copy() if self.gail_trainer.last_metrics else {
@@ -374,9 +555,13 @@ class GAILGenesisTrainer:
         
         return combined_metrics
     
-    def train(self, save_dir: str = "./gail_outputs") -> Dict[str, List]:
+    def train(self, save_dir: str = "./gail_outputs", use_physics_data: bool = True) -> Dict[str, List]:
         """
         Main GAIL training loop
+        
+        Args:
+            save_dir: Directory to save training outputs
+            use_physics_data: Whether to use physics-aware expert data
         
         Following LocoMujoco's training structure
         """
@@ -384,12 +569,13 @@ class GAILGenesisTrainer:
         print(f"   Updates: {self.config.num_updates}")
         print(f"   Environments: {self.config.num_envs}")
         print(f"   Steps per update: {self.config.num_steps}")
+        print(f"   Expert data: {'Physics-aware' if use_physics_data else 'Traditional'}")
         
         # Create save directory
         os.makedirs(save_dir, exist_ok=True)
         
         # Load expert data
-        if not self.load_expert_data():
+        if not self.load_expert_data(use_physics=use_physics_data):
             raise RuntimeError("Failed to load expert data")
         
         # Reset environment

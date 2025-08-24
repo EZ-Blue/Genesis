@@ -298,6 +298,7 @@ class LocoMujocoDataBridge:
                 #
                 # This fix restores the same logic as the working deprecated version.
                 if hasattr(self.loco_trajectory, 'info') and hasattr(self.loco_trajectory.info, 'joint_name2ind_qpos'):
+
                     if joint_name in self.loco_trajectory.info.joint_name2ind_qpos:
                         loco_qpos_idx_array = self.loco_trajectory.info.joint_name2ind_qpos[joint_name]
                         loco_qvel_idx_array = self.loco_trajectory.info.joint_name2ind_qvel[joint_name]
@@ -418,9 +419,13 @@ class LocoMujocoDataBridge:
         )
         self.genesis_env.robot.set_pos(root_pos, envs_idx=env_ids)
         self.genesis_env.robot.set_quat(root_quat, envs_idx=env_ids)
+
+        # print(f"DATA BRIDGE BEFORE STEP: {self.genesis_env.robot.get_dofs_position(dofs_idx_local=self.genesis_env.motors_dof_idx)}")
         
         # CRITICAL: Physics integration for smooth motion (like verify_trajectory.py)
         self.genesis_env.scene.step()
+
+        # print(f"DATA BRIDGE AFTER STEP: {self.genesis_env.robot.get_dofs_position(dofs_idx_local=self.genesis_env.motors_dof_idx)}")
         
         # Update environment state buffers
         self.genesis_env._update_robot_state()

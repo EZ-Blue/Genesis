@@ -42,7 +42,9 @@ class SkeletonHumanoidEnv:
         self.use_box_feet = use_box_feet
         self.disable_arms = disable_arms
         self.dt = dt
-        self.episode_length_s = episode_length_s
+        # Shorter episode length = faster training and more stable typically
+        # use longer episode length for long horizon stability in cyclical motions 
+        self.episode_length_s = episode_length_s  
         self.max_episode_length = math.ceil(episode_length_s / dt)
         self.device = gs.device
         
@@ -60,7 +62,8 @@ class SkeletonHumanoidEnv:
 
         # Joint names in LocoMujoco SkeletonTorque observation order
         # This matches the order expected in LocoMujoco observations (indices 5-31)
-        self.joint_names = {
+        # CRITICAL FIX: Use list instead of set to maintain consistent ordering
+        self.joint_names = [
             # Right leg (5 joints)
             "hip_flexion_r", "hip_adduction_r", "hip_rotation_r", "knee_angle_r", "ankle_angle_r", 
 
@@ -82,7 +85,7 @@ class SkeletonHumanoidEnv:
             
             # Foot joints (excluded with box_feet=True)
             "subtalar_angle_r", "mtp_angle_r", "subtalar_angle_l", "mtp_angle_l",
-        }
+        ]
         
         # Build scene
         self.scene.build(n_envs=num_envs)
@@ -156,10 +159,10 @@ class SkeletonHumanoidEnv:
         """Load skeleton robot into scene (from current implementation)"""
         # Select robot file based on box_feet setting (exact same logic)
         if self.use_box_feet:
-            robot_file = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
+            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/vis_boxfeet_genesis_skeleton.xml"
             print(f"Using LocoMujoco-style box feet for stable ground contact")
         else:
-            robot_file = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/skeleton/revised_genesis_skeleton.xml"
+            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/revised_genesis_skeleton.xml"
             print(f"Using standard foot collision meshes")
         
         # Load robot (from base env)
@@ -182,6 +185,9 @@ class SkeletonHumanoidEnv:
         """Setup action specification using Genesis motor detection"""
         if self.use_box_feet:
             excluded_joints = {"subtalar_angle_l", "mtp_angle_l", "subtalar_angle_r", "mtp_angle_r"}
+
+            # joint.dof_start returns the GLOBAL index (the starting index of the dof in the rigid solver)
+            # So motors_dof_idx are the global motor indices in the simulation
             self.motors_dof_idx = [self.robot.get_joint(name).dof_start for name in self.joint_names if name not in excluded_joints]
             self.joint_to_motor_idx = {name: self.robot.get_joint(name).dof_start for name in self.joint_names if name not in excluded_joints}
         else:
@@ -194,45 +200,94 @@ class SkeletonHumanoidEnv:
         print(f"Joint to Motor Idx Mapping: {self.joint_to_motor_idx}\n")
 
     def setup_pd_control(self):
-        """Setup PD gains matching LocoMujoco skeleton_torque configuration"""
-        print("Setting up LocoMujoco-matching PD control gains...")
+        """Setup PD gains with proper unit conversion from MuJoCo to Genesis"""
+        print("Setting up PD control gains with MuJoCo→Genesis unit conversion...")
         
         # Initialize with default values for ALL robot DOFs
-        kp_values = torch.ones(self.robot.n_dofs, device=self.device) * 100.0  # Default kp
-        kv_values = torch.ones(self.robot.n_dofs, device=self.device) * 2.0    # Default kv
+        kp_values = torch.ones(self.robot.n_dofs, device=self.device) * 20.0  # Default kp
+        kv_values = torch.ones(self.robot.n_dofs, device=self.device) * 1.0    # Default kv
         
-        # LocoMujoco PD gains from training configuration
+        # Unit conversion factor: Genesis expects ~5-10x higher gains than MuJoCo
+        # Based on Genesis Go2 (kp=70, kd=3) vs typical robot gains
+        
+        # LocoMujoco XML gains converted to Genesis units
         loco_pd_gains = {
-            # Lumbar joints
-            "lumbar_extension": (300, 6), "lumbar_bending": (160, 5), "lumbar_rotation": (100, 5),
-            
-            # Leg joints (right)
-            "hip_flexion_r": (200, 5), "hip_adduction_r": (200, 5), "hip_rotation_r": (200, 5), "knee_angle_r": (300, 6), 
-            "ankle_angle_r": (40, 2), "subtalar_angle_r": (40, 2), "mtp_angle_r": (40, 2),
-            
-            # Leg joints (left)
-            "hip_flexion_l": (200, 5), "hip_adduction_l": (200, 5), "hip_rotation_l": (200, 5), "knee_angle_l": (300, 6),
-            "ankle_angle_l": (40, 2), "subtalar_angle_l": (40, 2), "mtp_angle_l": (40, 2),
-            
-            # Arm joints (right)
-            "arm_flex_r": (100, 2), "arm_add_r": (100, 2), "arm_rot_r": (100, 2), "elbow_flex_r": (100, 2), "pro_sup_r": (50, 2),
-            "wrist_flex_r": (50, 2), "wrist_dev_r": (50, 2),
-            
-            # Arm joints (left)
-            "arm_flex_l": (100, 2), "arm_add_l": (100, 2), "arm_rot_l": (100, 2), "elbow_flex_l": (100, 2), "pro_sup_l": (50, 2),
-            "wrist_flex_l": (50, 2), "wrist_dev_l": (50, 2),
+            # Lumbar joints (from XML) - scaled up for Genesis
+            # Spine
+            "lumbar_extension": (1200.0, 120.0),
+            "lumbar_bending":   (1200.0, 120.0),
+            "lumbar_rotation":  (300.0,   30.0),
+
+            # Right leg
+            "hip_flexion_r":    (1300.0, 130.0),
+            "hip_adduction_r":  (1100.0, 110.0),
+            "hip_rotation_r":   (120.0,   12.0),
+            "knee_angle_r":     (1900.0, 190.0),
+            "ankle_angle_r":    (350.0,   35.0),
+            "subtalar_angle_r": (60.0,     6.0),
+            "mtp_angle_r":      (6.0,      0.6),
+
+            # Left leg
+            "hip_flexion_l":    (1300.0, 130.0),
+            "hip_adduction_l":  (1100.0, 110.0),
+            "hip_rotation_l":   (120.0,   12.0),
+            "knee_angle_l":     (1900.0, 190.0),
+            "ankle_angle_l":    (350.0,   35.0),
+            "subtalar_angle_l": (60.0,     6.0),
+            "mtp_angle_l":      (6.0,      0.6),
+
+            # Right arm
+            "arm_flex_r":       (140.0,   14.0),
+            "arm_add_r":        (140.0,   14.0),
+            "arm_rot_r":        (50.0,     5.0),
+            "elbow_flex_r":     (220.0,   22.0),
+            "pro_sup_r":        (40.0,     4.0),
+            "wrist_flex_r":     (80.0,     8.0),
+            "wrist_dev_r":      (70.0,     7.0),
+
+            # Left arm
+            "arm_flex_l":       (140.0,   14.0),
+            "arm_add_l":        (140.0,   14.0),
+            "arm_rot_l":        (50.0,     5.0),
+            "elbow_flex_l":     (220.0,   22.0),
+            "pro_sup_l":        (40.0,     4.0),
+            "wrist_flex_l":     (80.0,     8.0),
+            "wrist_dev_l":      (70.0,     7.0),
         }
+
+        # loco_pd_gains = {
+        #     # Lumbar joints
+        #     "lumbar_extension": (300, 6), "lumbar_bending": (160, 5), "lumbar_rotation": (100, 5),
+            
+        #     # Leg joints (right)
+        #     "hip_flexion_r": (200, 5), "hip_adduction_r": (200, 5), "hip_rotation_r": (200, 5), "knee_angle_r": (300, 6), 
+        #     "ankle_angle_r": (40, 2), "subtalar_angle_r": (40, 2), "mtp_angle_r": (40, 2),
+            
+        #     # Leg joints (left)
+        #     "hip_flexion_l": (200, 5), "hip_adduction_l": (200, 5), "hip_rotation_l": (200, 5), "knee_angle_l": (300, 6),
+        #     "ankle_angle_l": (40, 2), "subtalar_angle_l": (40, 2), "mtp_angle_l": (40, 2),
+            
+        #     # Arm joints (right)
+        #     "arm_flex_r": (100, 2), "arm_add_r": (100, 2), "arm_rot_r": (100, 2), "elbow_flex_r": (100, 2), "pro_sup_r": (50, 2),
+        #     "wrist_flex_r": (50, 2), "wrist_dev_r": (50, 2),
+            
+        #     # Arm joints (left)
+        #     "arm_flex_l": (100, 2), "arm_add_l": (100, 2), "arm_rot_l": (100, 2), "elbow_flex_l": (100, 2), "pro_sup_l": (50, 2),
+        #     "wrist_flex_l": (50, 2), "wrist_dev_l": (50, 2),
+        # }
         
-        # Apply LocoMujoco PD gains to corresponding Genesis joints
+
+        # Apply LocoMujoco PD gains with joint-specific tuning for stability
         applied_count = 0
         for joint_name, (kp, kv) in loco_pd_gains.items():
             if joint_name in self.joint_to_motor_idx:
                 dof_idx = self.joint_to_motor_idx[joint_name]
+                
                 # Update the tensors at the specific DOF index
-                kp_values[dof_idx] = float(kp)
-                kv_values[dof_idx] = float(kv)
+                kp_values[dof_idx] = float(kp) * .6
+                kv_values[dof_idx] = float(kv) * .6
                 applied_count += 1
-                print(f"    Applied LocoMujoco gains: {joint_name} (DOF {dof_idx}): kp={kp}, kv={kv}")
+                print(f"    Applied tuned gains: {joint_name} (DOF {dof_idx}): kp={float(kp)}, kv={float(kv)}")
             else:
                 print(f"    Warning: Joint {joint_name} not found in action mapping")
         
@@ -394,12 +449,14 @@ class SkeletonHumanoidEnv:
         """Apply position control actions to joints using PD control"""
         
         # Clip actions to reasonable range for stability
-        actions = torch.clamp(actions, min=-1.0, max=1.0)
+        actions = torch.clamp(actions, min=-2.0, max=2.0)
         
         # Actions represent target joint positions for PD control
         # Apply actions directly to the motors using pre-computed DOF indices
         self.robot.control_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
         
+        # self.robot.set_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
+
         # Track energy consumption (approximate for position control)
         if hasattr(self, 'dof_vel') and hasattr(self, 'energy_consumption'):
             # Get velocities for controlled DOFs only
@@ -454,6 +511,7 @@ class SkeletonHumanoidEnv:
         
         # Component 2: Joint positions (27D) in controlled joint order
         joint_pos = self.robot.get_dofs_position([idx - self.robot.dof_start for idx in self.motors_dof_idx])
+        # joint_pos = self.robot.get_dofs_position(self.motors_dof_idx)
         
         # Component 3: dq_root (6D) = [lin_vel_x, lin_vel_y, lin_vel_z, ang_vel_x, ang_vel_y, ang_vel_z]
         dq_root = torch.cat([
@@ -463,7 +521,8 @@ class SkeletonHumanoidEnv:
         
         # Component 4: Joint velocities (27D) in controlled joint order
         joint_vel = self.robot.get_dofs_velocity([idx - self.robot.dof_start for idx in self.motors_dof_idx])
-        
+        # joint_vel = self.robot.get_dofs_velocity(self.motors_dof_idx)
+
         # Assemble final observation in LocoMujoco order
         obs = torch.cat([
             q_root_no_xy,  # 5D root state

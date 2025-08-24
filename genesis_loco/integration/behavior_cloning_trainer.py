@@ -126,7 +126,7 @@ class BehaviorCloningTrainer:
         """Setup Genesis skeleton environment with observation history for temporal context"""
         self.env = SkeletonHumanoidEnv(
             num_envs=1,  # Single environment for data collection
-            episode_length_s=30.0,
+            episode_length_s=10.0,
             dt=0.01,
             show_viewer=False,
             use_box_feet=True,
