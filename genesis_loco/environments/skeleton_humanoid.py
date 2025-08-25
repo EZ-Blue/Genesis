@@ -159,7 +159,7 @@ class SkeletonHumanoidEnv:
         """Load skeleton robot into scene (from current implementation)"""
         # Select robot file based on box_feet setting (exact same logic)
         if self.use_box_feet:
-            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/vis_boxfeet_genesis_skeleton.xml"
+            robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
             print(f"Using LocoMujoco-style box feet for stable ground contact")
         else:
             robot_file = "/home/ez/Documents/Genesis/genesis_loco/skeleton/revised_genesis_skeleton.xml"
@@ -200,94 +200,68 @@ class SkeletonHumanoidEnv:
         print(f"Joint to Motor Idx Mapping: {self.joint_to_motor_idx}\n")
 
     def setup_pd_control(self):
-        """Setup PD gains with proper unit conversion from MuJoCo to Genesis"""
-        print("Setting up PD control gains with MuJoCo→Genesis unit conversion...")
+        """Setup PD gains directly from LocoMujoco skeleton_torque.xml"""
+        print("Setting up PD control gains from LocoMujoco skeleton_torque.xml...")
         
-        # Initialize with default values for ALL robot DOFs
-        kp_values = torch.ones(self.robot.n_dofs, device=self.device) * 20.0  # Default kp
-        kv_values = torch.ones(self.robot.n_dofs, device=self.device) * 1.0    # Default kv
+        # Initialize with default values for ALL robot DOFs (from XML defaults)
+        kp_values = torch.ones(self.robot.n_dofs, device=self.device) * 1.0  # Default stiffness="1.0"
+        kv_values = torch.ones(self.robot.n_dofs, device=self.device) * 1.0  # Default damping="1.0"
         
-        # Unit conversion factor: Genesis expects ~5-10x higher gains than MuJoCo
-        # Based on Genesis Go2 (kp=70, kd=3) vs typical robot gains
-        
-        # LocoMujoco XML gains converted to Genesis units
+        # PD gains directly from skeleton_torque.xml (stiffness=kp, damping=kv)
         loco_pd_gains = {
-            # Lumbar joints (from XML) - scaled up for Genesis
-            # Spine
-            "lumbar_extension": (1200.0, 120.0),
-            "lumbar_bending":   (1200.0, 120.0),
-            "lumbar_rotation":  (300.0,   30.0),
-
-            # Right leg
-            "hip_flexion_r":    (1300.0, 130.0),
-            "hip_adduction_r":  (1100.0, 110.0),
-            "hip_rotation_r":   (120.0,   12.0),
-            "knee_angle_r":     (1900.0, 190.0),
-            "ankle_angle_r":    (350.0,   35.0),
-            "subtalar_angle_r": (60.0,     6.0),
-            "mtp_angle_r":      (6.0,      0.6),
-
-            # Left leg
-            "hip_flexion_l":    (1300.0, 130.0),
-            "hip_adduction_l":  (1100.0, 110.0),
-            "hip_rotation_l":   (120.0,   12.0),
-            "knee_angle_l":     (1900.0, 190.0),
-            "ankle_angle_l":    (350.0,   35.0),
-            "subtalar_angle_l": (60.0,     6.0),
-            "mtp_angle_l":      (6.0,      0.6),
-
-            # Right arm
-            "arm_flex_r":       (140.0,   14.0),
-            "arm_add_r":        (140.0,   14.0),
-            "arm_rot_r":        (50.0,     5.0),
-            "elbow_flex_r":     (220.0,   22.0),
-            "pro_sup_r":        (40.0,     4.0),
-            "wrist_flex_r":     (80.0,     8.0),
-            "wrist_dev_r":      (70.0,     7.0),
-
-            # Left arm
-            "arm_flex_l":       (140.0,   14.0),
-            "arm_add_l":        (140.0,   14.0),
-            "arm_rot_l":        (50.0,     5.0),
-            "elbow_flex_l":     (220.0,   22.0),
-            "pro_sup_l":        (40.0,     4.0),
-            "wrist_flex_l":     (80.0,     8.0),
-            "wrist_dev_l":      (70.0,     7.0),
+            # Lumbar joints (from XML)
+            "lumbar_extension": (10, 5),  # stiffness="10" damping="5"
+            "lumbar_bending": (10, 5),    # stiffness="10" damping="5"
+            "lumbar_rotation": (20, 5),   # stiffness="20" damping="5"
+            
+            # Right leg joints (from XML)
+            "hip_flexion_r": (10, 5),     # stiffness="10" damping="5"
+            "hip_adduction_r": (10, 5),   # stiffness="10" damping="5"
+            "hip_rotation_r": (20, 5),    # stiffness="20" damping="5"
+            "knee_angle_r": (1, 1),       # Uses default: stiffness="1.0" damping="1.0"
+            "ankle_angle_r": (10, 1),     # stiffness="10" damping="1"
+            "subtalar_angle_r": (1, 1),   # Uses default: stiffness="1.0" damping="1.0"
+            "mtp_angle_r": (1, 1),        # Uses default: stiffness="1.0" damping="1.0"
+            
+            # Left leg joints (from XML)
+            "hip_flexion_l": (10, 5),     # stiffness="10" damping="5"
+            "hip_adduction_l": (10, 5),   # stiffness="10" damping="5"
+            "hip_rotation_l": (20, 5),    # stiffness="20" damping="5"
+            "knee_angle_l": (1, 1),       # Uses default: stiffness="1.0" damping="1.0"
+            "ankle_angle_l": (10, 1),     # stiffness="10" damping="1"
+            "subtalar_angle_l": (1, 1),   # Uses default: stiffness="1.0" damping="1.0"
+            "mtp_angle_l": (1, 1),        # Uses default: stiffness="1.0" damping="1.0"
+            
+            # Right arm joints (from XML - most have default values)
+            "arm_flex_r": (1, 1),         # Uses default: stiffness="1.0" damping="1.0"
+            "arm_add_r": (1, 1),          # Uses default: stiffness="1.0" damping="1.0"
+            "arm_rot_r": (1, 1),          # Uses default: stiffness="1.0" damping="1.0"
+            "elbow_flex_r": (0, 1),       # stiffness="0" (disabled in XML)
+            "pro_sup_r": (0, 1),          # stiffness="0" (disabled in XML)
+            "wrist_flex_r": (0, 1),       # stiffness="0" (disabled in XML)
+            "wrist_dev_r": (0, 1),        # stiffness="0" (disabled in XML)
+            
+            # Left arm joints (from XML - most have default values)
+            "arm_flex_l": (1, 1),         # Uses default: stiffness="1.0" damping="1.0"
+            "arm_add_l": (1, 1),          # Uses default: stiffness="1.0" damping="1.0"
+            "arm_rot_l": (1, 1),          # Uses default: stiffness="1.0" damping="1.0"
+            "elbow_flex_l": (0, 1),       # stiffness="0" (disabled in XML)
+            "pro_sup_l": (0, 1),          # stiffness="0" (disabled in XML)
+            "wrist_flex_l": (0, 1),       # stiffness="0" (disabled in XML)
+            "wrist_dev_l": (0, 1),        # stiffness="0" (disabled in XML)
         }
 
-        # loco_pd_gains = {
-        #     # Lumbar joints
-        #     "lumbar_extension": (300, 6), "lumbar_bending": (160, 5), "lumbar_rotation": (100, 5),
-            
-        #     # Leg joints (right)
-        #     "hip_flexion_r": (200, 5), "hip_adduction_r": (200, 5), "hip_rotation_r": (200, 5), "knee_angle_r": (300, 6), 
-        #     "ankle_angle_r": (40, 2), "subtalar_angle_r": (40, 2), "mtp_angle_r": (40, 2),
-            
-        #     # Leg joints (left)
-        #     "hip_flexion_l": (200, 5), "hip_adduction_l": (200, 5), "hip_rotation_l": (200, 5), "knee_angle_l": (300, 6),
-        #     "ankle_angle_l": (40, 2), "subtalar_angle_l": (40, 2), "mtp_angle_l": (40, 2),
-            
-        #     # Arm joints (right)
-        #     "arm_flex_r": (100, 2), "arm_add_r": (100, 2), "arm_rot_r": (100, 2), "elbow_flex_r": (100, 2), "pro_sup_r": (50, 2),
-        #     "wrist_flex_r": (50, 2), "wrist_dev_r": (50, 2),
-            
-        #     # Arm joints (left)
-        #     "arm_flex_l": (100, 2), "arm_add_l": (100, 2), "arm_rot_l": (100, 2), "elbow_flex_l": (100, 2), "pro_sup_l": (50, 2),
-        #     "wrist_flex_l": (50, 2), "wrist_dev_l": (50, 2),
-        # }
-        
-
-        # Apply LocoMujoco PD gains with joint-specific tuning for stability
+        # Apply LocoMujoco PD gains directly from XML
         applied_count = 0
         for joint_name, (kp, kv) in loco_pd_gains.items():
             if joint_name in self.joint_to_motor_idx:
                 dof_idx = self.joint_to_motor_idx[joint_name]
                 
-                # Update the tensors at the specific DOF index
-                kp_values[dof_idx] = float(kp) * .6
-                kv_values[dof_idx] = float(kv) * .6
+                # Update the tensors at the specific DOF index with exact XML values
+                kp_values[dof_idx] = float(kp) 
+                kv_values[dof_idx] = float(kv) 
                 applied_count += 1
-                print(f"    Applied tuned gains: {joint_name} (DOF {dof_idx}): kp={float(kp)}, kv={float(kv)}")
+                print(f"    Applied XML gains: {joint_name} (DOF {dof_idx}): kp={float(kp)}, kv={float(kv)}")
             else:
                 print(f"    Warning: Joint {joint_name} not found in action mapping")
         
@@ -446,25 +420,31 @@ class SkeletonHumanoidEnv:
     #         self.energy_consumption += power * self.dt
 
     def _apply_actions(self, actions: torch.Tensor):
-        """Apply position control actions to joints using PD control"""
+        """Apply torque control actions directly to joints"""
         
-        # Clip actions to reasonable range for stability
-        actions = torch.clamp(actions, min=-2.0, max=2.0)
+        # TORQUE-BASED CONTROL: Scale actions from model output range to reasonable torques
+        # From debug output: model outputs ~[-0.8, 0.7], scale to reasonable torque range
+        scaled_torques = actions * 1.0  # Scale factor for torques (adjust as needed)
         
-        # Actions represent target joint positions for PD control
-        # Apply actions directly to the motors using pre-computed DOF indices
-        self.robot.control_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
+        # Clip torques to reasonable range for stability  
+        scaled_torques = torch.clamp(scaled_torques, min=-200.0, max=200.0) # torque limits
+        
+        # Apply torques directly to motors
+        self.robot.control_dofs_force(scaled_torques, dofs_idx_local=self.motors_dof_idx)
+        
+        # OLD POSITION-BASED CONTROL (commented out):
+        # actions = torch.clamp(actions, min=-2.0, max=2.0) # for pd control
+        # self.robot.control_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
         
         # self.robot.set_dofs_position(actions, dofs_idx_local=self.motors_dof_idx)
 
-        # Track energy consumption (approximate for position control)
+        # Track energy consumption (for torque control)
         if hasattr(self, 'dof_vel') and hasattr(self, 'energy_consumption'):
             # Get velocities for controlled DOFs only
             local_dof_indices = [idx - self.robot.dof_start for idx in self.motors_dof_idx]
             controlled_dof_vel = self.robot.get_dofs_velocity(local_dof_indices)
-            # Estimate power from position error and velocity
-            position_error = actions - self.robot.get_dofs_position(local_dof_indices)
-            power = torch.sum(torch.abs(position_error * controlled_dof_vel), dim=1)
+            # Power = torque * angular_velocity
+            power = torch.sum(torch.abs(scaled_torques * controlled_dof_vel), dim=1)
             self.energy_consumption += power * self.dt
 
     def _update_robot_state(self):

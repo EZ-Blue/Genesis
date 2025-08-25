@@ -21,6 +21,7 @@ import os
 import time
 import glob
 from typing import Dict, List
+# import keyboard  # Removed - requires root on Linux
 
 sys.path.append('/home/ez/Documents/Genesis/genesis_loco')
 
@@ -176,7 +177,7 @@ class BehaviorCloningTester:
             episode_length_s=30.0,  # Long episodes for evaluation
             dt=0.01,
             show_viewer=True,  # Enable visualization
-            use_box_feet=False,
+            use_box_feet=True,
             obs_history_length=1,  # Match training configuration
             sim_options=gs.options.SimOptions(
                 dt=0.1, 
@@ -350,6 +351,10 @@ class BehaviorCloningTester:
                 # Apply actions through environment's PD controller
                 # The environment's step function calls _apply_actions which uses control_dofs_position
                 obs, rewards, dones, info = self.env.step(actions.unsqueeze(0))
+
+                # Manual stepping control (press Enter to continue)
+                if step % 1 == 0:  # Every step - change to higher number for less frequent pauses
+                    input(f"Step {step}: Press Enter to continue (Ctrl+C to exit)...")
                 
                 # Record metrics
                 if record_metrics:

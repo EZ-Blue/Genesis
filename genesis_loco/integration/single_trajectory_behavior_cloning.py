@@ -142,7 +142,7 @@ class SingleTrajectoryTrainer:
             episode_length_s=10.0,
             dt=0.01,
             show_viewer=True,
-            use_box_feet=False,
+            use_box_feet=True,
             obs_history_length=1  # Simple observation for single trajectory
         )
         
@@ -348,15 +348,16 @@ class SingleTrajectoryTrainer:
             self.data_bridge.apply_trajectory_state(current_state, env_ids)
             current_obs = self.env._get_observations()[0]
 
-            # Get target from NEXT timestep (what we want to achieve)
-            next_state = self.data_bridge.get_trajectory_state(next_timestep)
-            if next_state is None:
+            # TORQUE-BASED TRAINING: Compute expert torques instead of positions
+            target_action = self.data_bridge.compute_expert_torques(current_timestep)
+            if target_action is None:
                 continue
-            
-            # self.data_bridge.apply_trajectory_state(next_state, env_ids)
-            # target_action = self.env.robot.get_dofs_position(dofs_idx_local=self.env.motors_dof_idx)[0]
-
-            target_action = next_state['dof_pos']
+                
+            # OLD POSITION-BASED TRAINING (commented out):
+            # next_state = self.data_bridge.get_trajectory_state(next_timestep)
+            # if next_state is None:
+            #     continue
+            # target_action = next_state['dof_pos']
 
             # Store in pre-allocated arrays
             observations[valid_samples] = current_obs.cpu().numpy()

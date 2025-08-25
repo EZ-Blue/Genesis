@@ -591,6 +591,84 @@ class LocoMujocoDataBridge:
         else:
             print(f"ℹ️  No cache files found matching pattern: {pattern}")
     
+    def compute_expert_torques(self, current_timestep: int) -> torch.Tensor:
+        """
+        Compute torques using PD control to achieve trajectory positions
+        
+        Uses the same PD gains as defined in skeleton_torque.xml to compute
+        what torques would be needed to follow the trajectory.
+        """
+        current_state = self.get_trajectory_state(current_timestep)
+        next_state = self.get_trajectory_state(current_timestep + 1)
+        
+        if current_state is None or next_state is None:
+            return None
+            
+        current_pos = current_state['dof_pos']
+        target_pos = next_state['dof_pos']
+        
+        # Get only the motor DOF positions (match the action space)
+        if len(current_pos) != len(self.motors_dof_idx):
+            # Extract motor positions from full DOF vector
+            motor_current_pos = current_pos[self.motors_dof_idx]
+            motor_target_pos = target_pos[self.motors_dof_idx] 
+        else:
+            motor_current_pos = current_pos
+            motor_target_pos = target_pos
+            
+        # Approximate velocities using finite differences
+        dt = 1.0 / self.trajectory_frequency
+        current_vel = torch.zeros_like(motor_current_pos)  # Assume zero for simplicity
+        target_vel = (motor_target_pos - motor_current_pos) / dt
+        
+        # PD gains mapped to actual joint names from environment
+        # Use the joint_names from genesis_env to get correct ordering
+        joint_pd_map = {
+            # From skeleton_torque.xml
+            "hip_flexion_r": (10.0, 5.0), "hip_adduction_r": (10.0, 5.0), "hip_rotation_r": (20.0, 5.0),
+            "knee_angle_r": (1.0, 1.0), "ankle_angle_r": (10.0, 1.0),
+            "hip_flexion_l": (10.0, 5.0), "hip_adduction_l": (10.0, 5.0), "hip_rotation_l": (20.0, 5.0), 
+            "knee_angle_l": (1.0, 1.0), "ankle_angle_l": (10.0, 1.0),
+            "lumbar_extension": (10.0, 5.0), "lumbar_bending": (10.0, 5.0), "lumbar_rotation": (20.0, 5.0),
+            "arm_flex_r": (1.0, 1.0), "arm_add_r": (1.0, 1.0), "arm_rot_r": (1.0, 1.0),
+            "elbow_flex_r": (0.0, 1.0), "pro_sup_r": (0.0, 1.0), "wrist_flex_r": (0.0, 1.0), "wrist_dev_r": (0.0, 1.0),
+            "arm_flex_l": (1.0, 1.0), "arm_add_l": (1.0, 1.0), "arm_rot_l": (1.0, 1.0),
+            "elbow_flex_l": (0.0, 1.0), "pro_sup_l": (0.0, 1.0), "wrist_flex_l": (0.0, 1.0), "wrist_dev_l": (0.0, 1.0),
+        }
+        
+        # Build gains in the correct order using joint_names from environment
+        kp_gains = []
+        kv_gains = []
+        
+        for joint_name in self.genesis_env.joint_names:  # Use actual joint ordering
+            if joint_name in joint_pd_map:
+                kp, kv = joint_pd_map[joint_name]
+                kp_gains.append(kp)
+                kv_gains.append(kv)
+            else:
+                # Fallback for unknown joints
+                kp_gains.append(1.0)
+                kv_gains.append(1.0)
+                print(f"⚠️  Unknown joint {joint_name}, using default gains")
+        
+        kp_gains = torch.tensor(kp_gains, device=self.device)
+        kv_gains = torch.tensor(kv_gains, device=self.device)
+        
+        # Ensure gains match motor count
+        if len(kp_gains) != len(self.motors_dof_idx):
+            print(f"⚠️  Warning: PD gains length ({len(kp_gains)}) != motor count ({len(self.motors_dof_idx)})")
+            # Fallback to default gains
+            kp_gains = torch.ones(len(self.motors_dof_idx), device=self.device) * 10.0
+            kv_gains = torch.ones(len(self.motors_dof_idx), device=self.device) * 2.0
+            
+        # PD torque calculation
+        pos_error = motor_target_pos - motor_current_pos
+        vel_error = target_vel - current_vel
+        
+        torques = kp_gains * pos_error + kv_gains * vel_error
+        
+        return torques
+
     @property
     def trajectory_length(self):
         """Get trajectory length in timesteps"""
