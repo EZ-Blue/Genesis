@@ -7,6 +7,7 @@ import sys
 import time
 import threading
 from threading import Event, RLock, Semaphore, Thread
+from typing import Optional, TYPE_CHECKING
 
 import imageio
 import numpy as np
@@ -14,7 +15,6 @@ import OpenGL
 from OpenGL.GL import *
 
 import genesis as gs
-from genesis.vis.rasterizer_context import RasterizerContext
 
 # Importing tkinter and creating a first context before importing pyglet is necessary to avoid later segfault on MacOS.
 # Note that destroying the window will cause segfault at exit.
@@ -51,6 +51,9 @@ from .node import Node
 from .renderer import Renderer
 from .shader_program import ShaderProgram, ShaderProgramCache
 from .trackball import Trackball
+
+if TYPE_CHECKING:
+    from genesis.vis.rasterizer_context import RasterizerContext
 
 
 pyglet.options["shadow_window"] = False
@@ -192,7 +195,7 @@ class Viewer(pyglet.window.Window):
 
     def __init__(
         self,
-        context: RasterizerContext,
+        context: "RasterizerContext",
         viewport_size=None,
         render_flags=None,
         viewer_flags=None,
@@ -218,6 +221,8 @@ class Viewer(pyglet.window.Window):
         self._offscreen_event = Event()
         self._initialized_event = Event()
         self._is_active = False
+        self._exception = None
+        self._thread: Optional[Thread] = None
         self._run_in_thread = run_in_thread
         self._seg_node_map = context.seg_node_map
 
@@ -398,10 +403,11 @@ class Viewer(pyglet.window.Window):
             self._thread.start()
             self._initialized_event.wait()
             if not self._is_active:
-                # TODO: For simplicity, the actual exception is not reported for now
+                if self._exception:
+                    raise self._exception
+                # Just to be extra careful, this fallback should never be triggered in practice.
                 raise OpenGL.error.Error("Invalid OpenGL context.")
         else:
-            self._thread = None
             if self.auto_start:
                 self.start()
 
@@ -1232,7 +1238,7 @@ class Viewer(pyglet.window.Window):
             # This approach avoids "flickering" when creating and closing an invalid context. Besides, it avoids
             # "frozen" graphical window during compilation that would be interpreted as as bug by the end-user.
             try:
-                super(Viewer, self).__init__(
+                super().__init__(
                     config=conf,
                     visible=False,
                     resizable=True,
@@ -1249,13 +1255,20 @@ class Viewer(pyglet.window.Window):
         self.switch_to()
         self.set_caption(self.viewer_flags["window_title"])
 
-        # Model the complete scene once, to make sure that everything is fine.
+        # Run the entire rendering pipeline once, to make sure that everything is fine.
         try:
             self.refresh()
-        except OpenGL.error.Error:
-            # Invalid OpenGL context. Closing before raising.
+        except OpenGL.error.Error as e:
+            # Invalid OpenGL context. Closing before anything else.
             self.on_close()
-            return
+
+            if self._run_in_thread:
+                # Reporting the exception for the main thread to raise it
+                self._exception = e
+                return
+            else:
+                # Raise the exception right away
+                raise
 
         # At this point, we are all set to display the graphical window if requested, finally!
         if not pyglet.options["headless"]:

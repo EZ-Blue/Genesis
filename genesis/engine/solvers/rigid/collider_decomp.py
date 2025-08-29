@@ -282,6 +282,7 @@ class Collider:
         collider_kernel_reset(
             envs_idx,
             self._solver._static_rigid_sim_config,
+            self._solver._static_rigid_sim_cache_key,
             self._collider_state,
         )
         self._contacts_info_cache = {}
@@ -294,6 +295,7 @@ class Collider:
             self._solver.links_state,
             self._solver.links_info,
             self._solver._static_rigid_sim_config,
+            self._solver._static_rigid_sim_cache_key,
             self._collider_state,
         )
 
@@ -306,6 +308,7 @@ class Collider:
             self._solver.geoms_state,
             self._solver.geoms_init_AABB,
             self._solver._static_rigid_sim_config,
+            self._solver._static_rigid_sim_cache_key,
         )
         # timer.stamp("func_update_aabbs")
         func_broad_phase(
@@ -315,6 +318,7 @@ class Collider:
             self._solver.geoms_info,
             self._solver._rigid_global_info,
             self._solver._static_rigid_sim_config,
+            self._solver._static_rigid_sim_cache_key,
             self._solver.constraint_solver.constraint_state,
             self._collider_state,
             self._solver.equalities_info,
@@ -331,6 +335,7 @@ class Collider:
             self._solver.faces_info,
             self._solver._rigid_global_info,
             self._solver._static_rigid_sim_config,
+            self._solver._static_rigid_sim_cache_key,
             self._collider_state,
             self._collider_info,
             self._collider_static_config,
@@ -349,6 +354,7 @@ class Collider:
             self._solver.verts_info,
             self._solver._rigid_global_info,
             self._solver._static_rigid_sim_config,
+            self._solver._static_rigid_sim_cache_key,
             self._collider_state,
             self._collider_info,
             self._collider_static_config,
@@ -361,6 +367,7 @@ class Collider:
                 self._solver.geoms_init_AABB,
                 self._solver._rigid_global_info,
                 self._solver._static_rigid_sim_config,
+                self._solver._static_rigid_sim_cache_key,
                 self._collider_state,
                 self._collider_info,
                 self._collider_static_config,
@@ -381,6 +388,7 @@ class Collider:
                 self._solver.edges_info,
                 self._solver._rigid_global_info,
                 self._solver._static_rigid_sim_config,
+                self._solver._static_rigid_sim_cache_key,
                 self._collider_state,
                 self._collider_info,
                 self._collider_static_config,
@@ -419,6 +427,7 @@ class Collider:
                 fout,
                 self._solver._rigid_global_info,
                 self._solver._static_rigid_sim_config,
+                self._solver._static_rigid_sim_cache_key,
                 self._collider_state,
                 self._collider_info,
             )
@@ -492,10 +501,12 @@ def rotmatx(matin, i0, i1, i2, f0, f1, f2):
     return matres
 
 
+@gs.maybe_pure
 @ti.kernel
 def collider_kernel_reset(
     envs_idx: ti.types.ndarray(),
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
 ):
     ti.loop_config(serialize=static_rigid_sim_config.para_level < gs.PARA_LEVEL.ALL)
@@ -511,12 +522,14 @@ def collider_kernel_reset(
 
 
 # only used with hibernation ??
+@gs.maybe_pure
 @ti.kernel
 def kernel_collider_clear(
     envs_idx: ti.types.ndarray(),
     links_state: array_class.LinksState,
     links_info: array_class.LinksInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
 ):
     ti.loop_config(serialize=static_rigid_sim_config.para_level < gs.PARA_LEVEL.ALL)
@@ -563,6 +576,7 @@ def kernel_collider_clear(
             collider_state.n_contacts[i_b] = 0
 
 
+@gs.maybe_pure
 @ti.kernel
 def collider_kernel_get_contacts(
     is_padded: ti.template(),
@@ -570,6 +584,7 @@ def collider_kernel_get_contacts(
     fout: ti.types.ndarray(),
     rigid_global_info: array_class.RigidGlobalInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
 ):
@@ -1138,6 +1153,7 @@ def func_check_collision_valid(
     return is_valid
 
 
+@gs.maybe_pure
 @ti.kernel
 def func_broad_phase(
     links_state: array_class.LinksState,
@@ -1146,6 +1162,7 @@ def func_broad_phase(
     geoms_info: array_class.GeomsInfo,
     rigid_global_info: array_class.RigidGlobalInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     # we will use ColliderBroadPhaseBuffer as typing after Hugh adds array_struct feature to gstaichi
     constraint_state: array_class.ConstraintState,
     collider_state: array_class.ColliderState,
@@ -1383,6 +1400,7 @@ def func_broad_phase(
                                     break
 
 
+@gs.maybe_pure
 @ti.kernel
 def func_narrow_phase_convex_vs_convex(
     links_state: array_class.LinksState,
@@ -1394,6 +1412,7 @@ def func_narrow_phase_convex_vs_convex(
     faces_info: array_class.FacesInfo,
     rigid_global_info: array_class.RigidGlobalInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
     collider_static_config: ti.template(),
@@ -1447,6 +1466,7 @@ def func_narrow_phase_convex_vs_convex(
                         verts_info=verts_info,
                         faces_info=faces_info,
                         static_rigid_sim_config=static_rigid_sim_config,
+                        static_rigid_sim_cache_key=static_rigid_sim_cache_key,
                         collider_state=collider_state,
                         collider_info=collider_info,
                         collider_static_config=collider_static_config,
@@ -1472,6 +1492,7 @@ def func_narrow_phase_convex_vs_convex(
                             verts_info=verts_info,
                             faces_info=faces_info,
                             static_rigid_sim_config=static_rigid_sim_config,
+                            static_rigid_sim_cache_key=static_rigid_sim_cache_key,
                             collider_state=collider_state,
                             collider_info=collider_info,
                             collider_static_config=collider_static_config,
@@ -1485,6 +1506,7 @@ def func_narrow_phase_convex_vs_convex(
                         )
 
 
+@gs.maybe_pure
 @ti.kernel
 def func_narrow_phase_convex_specializations(
     geoms_state: array_class.GeomsState,
@@ -1493,6 +1515,7 @@ def func_narrow_phase_convex_specializations(
     verts_info: array_class.VertsInfo,
     rigid_global_info: array_class.RigidGlobalInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
     collider_static_config: ti.template(),
@@ -1518,6 +1541,7 @@ def func_narrow_phase_convex_specializations(
                         geoms_init_AABB,
                         verts_info,
                         static_rigid_sim_config,
+                        static_rigid_sim_cache_key,
                         collider_state,
                         collider_info,
                         collider_static_config,
@@ -1537,6 +1561,7 @@ def func_narrow_phase_convex_specializations(
                     )
 
 
+@gs.maybe_pure
 @ti.kernel
 def func_narrow_phase_any_vs_terrain(
     geoms_state: array_class.GeomsState,
@@ -1544,6 +1569,7 @@ def func_narrow_phase_any_vs_terrain(
     geoms_init_AABB: array_class.GeomsInitAABB,
     rigid_global_info: array_class.RigidGlobalInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
     collider_static_config: ti.template(),
@@ -1588,6 +1614,7 @@ def func_narrow_phase_any_vs_terrain(
                     )
 
 
+@gs.maybe_pure
 @ti.kernel
 def func_narrow_phase_nonconvex_vs_nonterrain(
     links_state: array_class.LinksState,
@@ -1599,6 +1626,7 @@ def func_narrow_phase_nonconvex_vs_nonterrain(
     edges_info: array_class.EdgesInfo,
     rigid_global_info: array_class.RigidGlobalInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
     collider_static_config: ti.template(),
@@ -1797,6 +1825,7 @@ def func_plane_box_contact(
     geoms_init_AABB: array_class.GeomsInitAABB,
     verts_info: array_class.VertsInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
     collider_static_config: ti.template(),
@@ -1987,6 +2016,7 @@ def func_convex_convex_contact(
     verts_info: array_class.VertsInfo,
     faces_info: array_class.FacesInfo,
     static_rigid_sim_config: ti.template(),
+    static_rigid_sim_cache_key: array_class.StaticRigidSimCacheKey,
     collider_state: array_class.ColliderState,
     collider_info: array_class.ColliderInfo,
     collider_static_config: ti.template(),
@@ -2009,6 +2039,7 @@ def func_convex_convex_contact(
                 geoms_init_AABB=geoms_init_AABB,
                 verts_info=verts_info,
                 static_rigid_sim_config=static_rigid_sim_config,
+                static_rigid_sim_cache_key=static_rigid_sim_cache_key,
                 collider_state=collider_state,
                 collider_info=collider_info,
                 collider_static_config=collider_static_config,

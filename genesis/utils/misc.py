@@ -119,6 +119,7 @@ class redirect_libc_stderr:
 def assert_initialized(cls):
     original_init = cls.__init__
 
+    @functools.wraps(original_init)
     def new_init(self, *args, **kwargs):
         if not gs._initialized:
             raise RuntimeError("Genesis hasn't been initialized. Did you call `gs.init()`?")
@@ -149,10 +150,12 @@ def assert_built(method):
 
 
 def set_random_seed(seed):
-    # Note: we don't set seed for taichi, since taichi doesn't support stochastic operations in gradient computation. Therefore, we only allow deterministic taichi operations.
+    # Note: we don't set seed for taichi, since taichi doesn't support stochastic operations in gradient computation.
+    # Therefore, we only allow deterministic taichi operations.
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 
@@ -180,8 +183,6 @@ def get_device(backend: gs_backend, device_idx: Optional[int] = None):
         if not torch.cuda.is_available():
             gs.raise_exception("torch cuda not available")
 
-        if device_idx is None:
-            device_idx = torch.cuda.current_device()
         device = torch.device("cuda", device_idx)
         device_property = torch.cuda.get_device_properties(device)
         device_name = device_property.name
@@ -373,12 +374,12 @@ def _ensure_compiled(self, *args):
     return key
 
 
-def _launch_kernel(self, t_kernel, *args):
+def _launch_kernel(self, t_kernel, compiled_kernel_data, *args):
     launch_ctx = t_kernel.make_launch_context()
 
     template_num = 0
     for i, v in enumerate(args):
-        needed = self.arguments[i].annotation
+        needed = self.arg_metas[i].annotation
         if isinstance(needed, ti.template):
             template_num += 1
             continue
@@ -413,7 +414,8 @@ def _launch_kernel(self, t_kernel, *args):
 
     try:
         prog = impl.get_runtime().prog
-        compiled_kernel_data = prog.compile_kernel(prog.config(), prog.get_device_caps(), t_kernel)
+        if compiled_kernel_data is None:
+            compiled_kernel_data = prog.compile_kernel(prog.config(), prog.get_device_caps(), t_kernel)
         prog.launch_kernel(compiled_kernel_data, launch_ctx)
     except Exception as e:
         e = handle_exception_from_cpp(e)
@@ -517,18 +519,12 @@ def ti_field_to_torch(
     is_metal = gs.device.type == "mps"
     tc_dtype = _to_pytorch_type_fast(field_meta.dtype)
     if isinstance(field, ti.lang.ScalarField):
-        if is_metal:
-            out = torch.zeros(size=field_shape, dtype=tc_dtype, device="cpu")
-        else:
-            out = torch.zeros(size=field_shape, dtype=tc_dtype, device=gs.device)
+        out = torch.zeros(size=field_shape, dtype=tc_dtype, device="cpu" if is_metal else gs.device)
         _tensor_to_ext_arr_fast(field, out)
     else:
         as_vector = field.m == 1
         shape_ext = (field.n,) if as_vector else (field.n, field.m)
-        if is_metal:
-            out = torch.empty(field_shape + shape_ext, dtype=tc_dtype, device="cpu")
-        else:
-            out = torch.empty(field_shape + shape_ext, dtype=tc_dtype, device=gs.device)
+        out = torch.empty(field_shape + shape_ext, dtype=tc_dtype, device="cpu" if is_metal else gs.device)
         _matrix_to_ext_arr_fast(field, out, as_vector)
     if is_metal:
         out = out.to(gs.device)
