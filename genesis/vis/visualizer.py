@@ -1,3 +1,5 @@
+import os
+
 import pyglet
 import numpy as np
 import torch
@@ -55,7 +57,12 @@ class Visualizer(RBC):
             else:
                 display = pyglet.display.get_display()
                 screen = display.get_default_screen()
-                scale = screen.get_scale()
+                try:
+                    screen_scale = screen.get_scale()
+                except NotImplementedError:
+                    # Probably some headless screen
+                    screen_scale = 1.0
+                screen_height, screen_width = screen.height, screen.width
             self._has_display = True
         except Exception as e:
             if show_viewer:
@@ -66,11 +73,11 @@ class Visualizer(RBC):
             if gs.global_scene_list:
                 raise gs.raise_exception(
                     "Interactive viewer not supported when managing multiple scenes. Please set `show_viewer=False` "
-                    "or call `scene.destroy`."
+                    "or call `del scene`."
                 )
 
             if viewer_options.res is None:
-                viewer_height = (screen.height * scale) * VIEWER_DEFAULT_HEIGHT_RATIO
+                viewer_height = (screen_height * screen_scale) * VIEWER_DEFAULT_HEIGHT_RATIO
                 viewer_width = viewer_height / VIEWER_DEFAULT_ASPECT_RATIO
                 viewer_options.res = (int(viewer_width), int(viewer_height))
             if viewer_options.run_in_thread is None:
@@ -127,10 +134,24 @@ class Visualizer(RBC):
         self.viewer_lock = None
         self._renderer = None
 
-    def add_camera(self, res, pos, lookat, up, model, fov, aperture, focus_dist, GUI, spp, denoise, env_idx):
-        cam_idx = len(self._cameras)
+    def add_camera(self, res, pos, lookat, up, model, fov, aperture, focus_dist, GUI, spp, denoise, env_idx, debug):
+        cam_idx = len([camera for camera in self._cameras if camera.debug == debug])
         camera = Camera(
-            self, cam_idx, model, res, pos, lookat, up, fov, aperture, focus_dist, GUI, spp, denoise, env_idx=env_idx
+            self,
+            cam_idx,
+            model,
+            res,
+            pos,
+            lookat,
+            up,
+            fov,
+            aperture,
+            focus_dist,
+            GUI,
+            spp,
+            denoise,
+            env_idx=env_idx,
+            debug=debug,
         )
         self._cameras.append(camera)
         return camera
@@ -138,6 +159,8 @@ class Visualizer(RBC):
     def add_light(self, pos, dir, intensity, directional, castshadow, cutoff):
         if self._batch_renderer is not None:
             self._batch_renderer.add_light(pos, dir, intensity, directional, castshadow, cutoff)
+        else:
+            gs.raise_exception("`add_light` is specifically for batch renderer.")
 
     def reset(self):
         self._t = -1
@@ -153,10 +176,6 @@ class Visualizer(RBC):
         if self.viewer_lock is not None:
             if self._viewer is not None:
                 self._viewer.update(auto_refresh=True)
-
-            if self._batch_renderer is None:
-                for camera in self._cameras:
-                    self._rasterizer.render_camera(camera)
 
     def build(self):
         self._context.build(self._scene)
@@ -199,10 +218,11 @@ class Visualizer(RBC):
             return
 
         for camera in self._cameras:
-            if camera._attached_link is not None:
-                camera.move_to_attach()
-            elif camera._followed_entity is not None:
-                camera.update_following()
+            if camera.is_built:
+                if camera._attached_link is not None:
+                    camera.move_to_attach()
+                elif camera._followed_entity is not None:
+                    camera.update_following()
 
         if self._scene.rigid_solver.is_active():
             self._scene.rigid_solver.update_geoms_render_T()

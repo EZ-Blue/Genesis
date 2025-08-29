@@ -16,6 +16,7 @@ import numpy as np
 import mujoco
 import torch
 from huggingface_hub import snapshot_download
+from PIL import Image, UnidentifiedImageError
 from requests.exceptions import HTTPError
 
 import genesis as gs
@@ -23,10 +24,18 @@ import genesis.utils.geom as gu
 from genesis.utils import mjcf as mju
 from genesis.utils.mesh import get_assets_dir
 from genesis.utils.misc import tensor_to_array
+from genesis.options.morphs import URDF_FORMAT, MJCF_FORMAT, MESH_FORMATS, GLTF_FORMATS, USD_FORMATS
 
 
 REPOSITY_URL = "Genesis-Embodied-AI/Genesis"
 DEFAULT_BRANCH_NAME = "main"
+
+HUGGINGFACE_ASSETS_REVISION = "0c0bb46db0978a59524381194478cf390b3ff996"
+HUGGINGFACE_SNAPSHOT_REVISION = "b027a2474135ea7e07eb8b50d478b6199a5aec9b"
+
+MESH_EXTENSIONS = (".mtl", *MESH_FORMATS, *GLTF_FORMATS, *USD_FORMATS)
+IMAGE_EXTENSIONS = (".png", ".jpg")
+
 
 # Get repository "root" path (actually test dir is good enough)
 TEST_DIR = os.path.dirname(__file__)
@@ -164,18 +173,34 @@ def get_git_commit_info(ref="HEAD"):
     return revision, timestamp
 
 
-def get_hf_assets(pattern, num_retry: int = 4, retry_delay: float = 30.0, check: bool = True):
+def get_hf_dataset(
+    pattern,
+    repo_name: str = "assets",
+    local_dir: str | None = None,
+    num_retry: int = 4,
+    retry_delay: float = 30.0,
+    local_dir_use_symlinks: bool = True,
+):
     assert num_retry >= 1
 
-    for _ in range(num_retry):
-        num_trials = 0
+    if repo_name == "assets":
+        revision = HUGGINGFACE_ASSETS_REVISION
+    elif repo_name == "snapshots":
+        revision = HUGGINGFACE_SNAPSHOT_REVISION
+    else:
+        raise ValueError(f"Unsupported repository '{repo_name}'")
+
+    for i in range(num_retry):
         try:
             # Try downloading the assets
             asset_path = snapshot_download(
                 repo_type="dataset",
-                repo_id="Genesis-Intelligence/assets",
+                repo_id=f"Genesis-Intelligence/{repo_name}",
+                revision=revision,
                 allow_patterns=pattern,
                 max_workers=1,
+                local_dir=local_dir,
+                local_dir_use_symlinks=local_dir_use_symlinks,
             )
 
             # Make sure that download was successful
@@ -183,21 +208,34 @@ def get_hf_assets(pattern, num_retry: int = 4, retry_delay: float = 30.0, check:
             for path in Path(asset_path).rglob(pattern):
                 if not path.is_file():
                     continue
+
+                ext = path.suffix.lower()
+                if not ext in (URDF_FORMAT, MJCF_FORMAT, *IMAGE_EXTENSIONS, *MESH_EXTENSIONS):
+                    continue
+
                 has_files = True
 
                 if path.stat().st_size == 0:
                     raise HTTPError(f"File '{path}' is empty.")
 
-                if path.suffix.lower() in (".xml", ".urdf"):
+                if path.suffix.lower() in (URDF_FORMAT, MJCF_FORMAT):
                     try:
                         ET.parse(path)
                     except ET.ParseError as e:
                         raise HTTPError(f"Impossible to parse XML file.") from e
+                elif path.suffix.lower() in IMAGE_EXTENSIONS:
+                    try:
+                        Image.open(path)
+                    except UnidentifiedImageError as e:
+                        raise HTTPError(f"Impossible to parse Image file.") from e
+                elif path.suffix.lower() in MESH_EXTENSIONS:
+                    # TODO: Validating mesh files is more tricky. Ignoring them for now.
+                    pass
+
             if not has_files:
                 raise HTTPError("No file downloaded.")
-        except HTTPError:
-            num_trials += 1
-            if num_trials == num_retry:
+        except (HTTPError, FileNotFoundError) as e:
+            if i == num_retry - 1:
                 raise
             print(f"Failed to download assets from HuggingFace dataset. Trying again in {retry_delay}s...")
             time.sleep(retry_delay)
@@ -890,7 +928,7 @@ def check_mujoco_data_consistency(
 
     # ------------------------------------------------------------------------
 
-    gs_com = gs_sim.rigid_solver.links_state.COM.to_numpy()[:, 0]
+    gs_com = gs_sim.rigid_solver.links_state.root_COM.to_numpy()[:, 0]
     gs_root_idx = np.unique(gs_sim.rigid_solver.links_info.root_idx.to_numpy()[gs_bodies_idx])
     mj_com = mj_sim.data.subtree_com
     mj_root_idx = np.unique(mj_sim.model.body_rootid[mj_bodies_idx])

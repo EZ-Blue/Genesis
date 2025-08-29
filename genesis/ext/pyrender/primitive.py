@@ -475,10 +475,13 @@ class Primitive(object):
 
     def _remove_from_context(self):
         if self._vaid is not None:
-            glDeleteVertexArrays(1, [self._vaid])
-            glDeleteBuffers(len(self._buffers), list(self._buffers.values()))
+            try:
+                glDeleteVertexArrays(1, [self._vaid])
+                glDeleteBuffers(len(self._buffers), list(self._buffers.values()))
+            except OpenGL.error.Error:
+                pass
             self._vaid = None
-            self._buffers = {}
+            self._buffers.clear()
 
     def _in_context(self):
         return self._vaid is not None

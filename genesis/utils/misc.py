@@ -10,19 +10,19 @@ import sys
 import os
 from dataclasses import dataclass
 from collections import OrderedDict
-from typing import Any, Type, NoReturn
+from typing import Any, Type, NoReturn, Optional
 
 import numpy as np
 import cpuinfo
 import psutil
 import torch
 
-import taichi as ti
-from taichi.lang.util import to_pytorch_type
-from taichi._kernels import tensor_to_ext_arr, matrix_to_ext_arr
-from taichi.lang import impl
-from taichi.types import primitive_types
-from taichi.lang.exception import handle_exception_from_cpp
+import gstaichi as ti
+from gstaichi.lang.util import to_pytorch_type
+from gstaichi._kernels import tensor_to_ext_arr, matrix_to_ext_arr
+from gstaichi.lang import impl
+from gstaichi.types import primitive_types
+from gstaichi.lang.exception import handle_exception_from_cpp
 
 import genesis as gs
 from genesis.constants import backend as gs_backend
@@ -119,6 +119,7 @@ class redirect_libc_stderr:
 def assert_initialized(cls):
     original_init = cls.__init__
 
+    @functools.wraps(original_init)
     def new_init(self, *args, **kwargs):
         if not gs._initialized:
             raise RuntimeError("Genesis hasn't been initialized. Did you call `gs.init()`?")
@@ -142,17 +143,19 @@ def assert_built(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
         if not self.is_built:
-            gs.raise_exception("Scene is not built yet.")
+            gs.raise_exception(f"{type(self).__name__} is not built yet.")
         return method(self, *args, **kwargs)
 
     return wrapper
 
 
 def set_random_seed(seed):
-    # Note: we don't set seed for taichi, since taichi doesn't support stochastic operations in gradient computation. Therefore, we only allow deterministic taichi operations.
+    # Note: we don't set seed for taichi, since taichi doesn't support stochastic operations in gradient computation.
+    # Therefore, we only allow deterministic taichi operations.
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
 
@@ -175,12 +178,11 @@ def get_platform():
     assert False, f"Unknown platform name {name}"
 
 
-def get_device(backend: gs_backend):
+def get_device(backend: gs_backend, device_idx: Optional[int] = None):
     if backend == gs_backend.cuda:
         if not torch.cuda.is_available():
             gs.raise_exception("torch cuda not available")
 
-        device_idx = torch.cuda.current_device()
         device = torch.device("cuda", device_idx)
         device_property = torch.cuda.get_device_properties(device)
         device_name = device_property.name
@@ -192,13 +194,14 @@ def get_device(backend: gs_backend):
 
         # on mac, cpu and gpu are in the same device
         _, device_name, total_mem, _ = get_device(gs_backend.cpu)
-        device = torch.device("mps", 0)
+        device = torch.device("mps", device_idx)
 
     elif backend == gs_backend.vulkan:
         if torch.cuda.is_available():
             device, device_name, total_mem, _ = get_device(gs_backend.cuda)
         elif torch.xpu.is_available():  # pytorch 2.5+ supports Intel XPU device
-            device_idx = torch.xpu.current_device()
+            if device_idx is None:
+                device_idx = torch.xpu.current_device()
             device = torch.device("xpu", device_idx)
             device_property = torch.xpu.get_device_properties(device_idx)
             device_name = device_property.name
@@ -220,7 +223,7 @@ def get_device(backend: gs_backend):
     else:
         device_name = cpuinfo.get_cpu_info()["brand_raw"]
         total_mem = psutil.virtual_memory().total / 1024**3
-        device = torch.device("cpu")
+        device = torch.device("cpu", device_idx)
 
     return device, device_name, total_mem, backend
 
@@ -268,6 +271,14 @@ def get_gel_cache_dir():
 
 def get_remesh_cache_dir():
     return os.path.join(get_cache_dir(), "rm")
+
+
+def get_exr_cache_dir():
+    return os.path.join(get_cache_dir(), "exr")
+
+
+def get_usd_cache_dir():
+    return os.path.join(get_cache_dir(), "usd")
 
 
 def clean_cache_files():
@@ -363,12 +374,12 @@ def _ensure_compiled(self, *args):
     return key
 
 
-def _launch_kernel(self, t_kernel, *args):
+def _launch_kernel(self, t_kernel, compiled_kernel_data, *args):
     launch_ctx = t_kernel.make_launch_context()
 
     template_num = 0
     for i, v in enumerate(args):
-        needed = self.arguments[i].annotation
+        needed = self.arg_metas[i].annotation
         if isinstance(needed, ti.template):
             template_num += 1
             continue
@@ -403,7 +414,8 @@ def _launch_kernel(self, t_kernel, *args):
 
     try:
         prog = impl.get_runtime().prog
-        compiled_kernel_data = prog.compile_kernel(prog.config(), prog.get_device_caps(), t_kernel)
+        if compiled_kernel_data is None:
+            compiled_kernel_data = prog.compile_kernel(prog.config(), prog.get_device_caps(), t_kernel)
         prog.launch_kernel(compiled_kernel_data, launch_ctx)
     except Exception as e:
         e = handle_exception_from_cpp(e)
@@ -507,18 +519,12 @@ def ti_field_to_torch(
     is_metal = gs.device.type == "mps"
     tc_dtype = _to_pytorch_type_fast(field_meta.dtype)
     if isinstance(field, ti.lang.ScalarField):
-        if is_metal:
-            out = torch.zeros(size=field_shape, dtype=tc_dtype, device="cpu")
-        else:
-            out = torch.zeros(size=field_shape, dtype=tc_dtype, device=gs.device)
+        out = torch.zeros(size=field_shape, dtype=tc_dtype, device="cpu" if is_metal else gs.device)
         _tensor_to_ext_arr_fast(field, out)
     else:
         as_vector = field.m == 1
         shape_ext = (field.n,) if as_vector else (field.n, field.m)
-        if is_metal:
-            out = torch.empty(field_shape + shape_ext, dtype=tc_dtype, device="cpu")
-        else:
-            out = torch.empty(field_shape + shape_ext, dtype=tc_dtype, device=gs.device)
+        out = torch.empty(field_shape + shape_ext, dtype=tc_dtype, device="cpu" if is_metal else gs.device)
         _matrix_to_ext_arr_fast(field, out, as_vector)
     if is_metal:
         out = out.to(gs.device)

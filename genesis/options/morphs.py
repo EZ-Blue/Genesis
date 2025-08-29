@@ -1,3 +1,10 @@
+"""
+We define all types of morphologies here: shape primitives, meshes, URDF, MJCF, and soft robot description files.
+
+These are independent of backend solver type and are shared by different solvers, e.g. a mesh can be either loaded as a
+rigid object / MPM object / FEM object.
+"""
+
 import os
 from typing import Any, List, Optional, Sequence, Tuple, Union
 
@@ -10,11 +17,12 @@ import genesis.utils.misc as mu
 from .misc import CoacdOptions
 from .options import Options
 
-"""
-We define all types of morphologies here: shape primitives, meshes, URDF, MJCF, and soft robot description files.
-These are independent of backend solver type and are shared by different solvers.
-E.g. a mesh can be either loaded as a rigid object / MPM object / FEM object.
-"""
+
+URDF_FORMAT = ".urdf"
+MJCF_FORMAT = ".xml"
+MESH_FORMATS = (".obj", ".ply", ".stl")
+GLTF_FORMATS = (".glb", ".gltf")
+USD_FORMATS = (".usd", ".usda", ".usdc", ".usdz")
 
 
 class TetGenMixin(Options):
@@ -69,6 +77,9 @@ class Morph(Options):
         **This is only used for RigidEntity.**
     is_free : bool, optional
         Whether the entity is free to move. Defaults to True. **This is only used for RigidEntity.**
+        This determines whether the entity's geoms have their vertices put into StructFreeVertsState or
+        StructFixedVertsState, and effectively whether they're stored per batch-element, or stored once and shared
+        for the entire batch. That affects correct processing of collision detection.
     """
 
     # Note: pos, euler, quat store only initial varlues at creation time, and are unaffected by sim
@@ -467,11 +478,11 @@ class FileMorph(Morph):
     decimate_aggressiveness : int
         How hard the decimation process will try to match the target number of faces, as a integer ranging from 0 to 8.
         0 is losseless. 2 preserves all features of the original geometry. 5 may significantly alters the original
-        geometry if necessary. 8 does what needs to be done at all costs. Defaults to 5.
+        geometry if necessary. 8 does what needs to be done at all costs. Defaults to 2.
         **This is only used for RigidEntity.**
     convexify : bool, optional
         Whether to convexify the entity. When convexify is True, all the meshes in the entity will each be converted
-        to a set of convex hulls. The mesh with be decomposed into multiple convex components if a single one is not
+        to a set of convex hulls. The mesh will be decomposed into multiple convex components if the convex hull is not
         sufficient to met the desired accuracy (see 'decompose_(robot|object)_error_threshold' documentation). The
         module 'coacd' is used for this decomposition process. If not given, it defaults to `True` for `RigidEntity`
         and `False` for other deformable entities.
@@ -503,7 +514,7 @@ class FileMorph(Morph):
     scale: Union[float, tuple] = 1.0
     decimate: bool = True
     decimate_face_num: int = 500
-    decimate_aggressiveness: int = 5
+    decimate_aggressiveness: int = 2
     convexify: Optional[bool] = None
     decompose_nonconvex: Optional[bool] = None
     decompose_object_error_threshold: float = 0.15
@@ -555,6 +566,9 @@ class FileMorph(Morph):
 
     def _repr_type(self):
         return f"<gs.morphs.{self.__class__.__name__}(file='{self.file}')>"
+
+    def is_format(self, format):
+        return self.file.lower().endswith(format)
 
 
 class Mesh(FileMorph, TetGenMixin):
@@ -768,8 +782,8 @@ class MJCF(FileMorph):
 
     def __init__(self, **data):
         super().__init__(**data)
-        if not self.file.endswith(".xml"):
-            gs.raise_exception(f"Expected `.xml` extension for MJCF file: {self.file}")
+        if not self.is_format(MJCF_FORMAT):
+            gs.raise_exception(f"Expected `{MJCF_FORMAT}` extension for MJCF file: {self.file}")
 
         # What you want to do with scaling is kinda "zoom" the world from the perspective of the entity, i.e. scale the
         # geometric properties of an entity wrt its root pose. In the general case, ie for a 3D vector scale, (x, y, z)
@@ -878,8 +892,8 @@ class URDF(FileMorph):
 
     def __init__(self, **data):
         super().__init__(**data)
-        if isinstance(self.file, str) and not self.file.endswith(".urdf"):
-            gs.raise_exception(f"Expected `.urdf` extension for URDF file: {self.file}")
+        if isinstance(self.file, str) and not self.is_format(URDF_FORMAT):
+            gs.raise_exception(f"Expected `{URDF_FORMAT}` extension for URDF file: {self.file}")
 
         # Anisotropic scaling is ill-defined for poly-articulated robots. See related MJCF about this for details.
         if isinstance(self.scale, np.ndarray) and self.scale.std() > gs.EPS:
@@ -997,10 +1011,10 @@ class Drone(FileMorph):
         # Make sure that Propellers links are preserved
         self.links_to_keep = tuple(set([*self.links_to_keep, *self.propellers_link_name]))
 
-        if isinstance(self.file, str) and not self.file.endswith(".urdf"):
-            gs.raise_exception(f"Drone only supports `.urdf` extension: {self.file}")
+        if isinstance(self.file, str) and not self.is_format(URDF_FORMAT):
+            gs.raise_exception(f"Drone only supports `{URDF_FORMAT}` extension: {self.file}")
 
-        if self.model not in ["CF2X", "CF2P", "RACE"]:
+        if self.model not in ("CF2X", "CF2P", "RACE"):
             gs.raise_exception(f"Unsupported `model`: {self.model}.")
 
 

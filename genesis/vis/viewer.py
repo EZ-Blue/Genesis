@@ -116,10 +116,10 @@ class Viewer(RBC):
 
                 if i == len(all_opengl_platforms) - 1:
                     raise
-
-            # Select PyOpenGL backend compatible with `pyrender.OffscreenRenderer`
-            if platform not in ("osmesa", "pyglet", "egl"):
-                os.environ["PYOPENGL_PLATFORM"] = "pyglet"
+            finally:
+                del os.environ["PYOPENGL_PLATFORM"]
+                if opengl_platform_orig is not None:
+                    os.environ["PYOPENGL_PLATFORM"] = opengl_platform_orig
 
         self.lock = ViewerLock(self._pyrender_viewer)
 
@@ -164,8 +164,8 @@ class Viewer(RBC):
         if self._max_FPS is not None:
             self.rate.sleep()
 
-    def render_offscreen(self, camera_node, render_target, depth=False, seg=False, normal=False):
-        return self._pyrender_viewer.render_offscreen(camera_node, render_target, depth, seg, normal)
+    def render_offscreen(self, camera_node, render_target, rgb=True, depth=False, seg=False, normal=False):
+        return self._pyrender_viewer.render_offscreen(camera_node, render_target, rgb, depth, seg, normal)
 
     def set_camera_pose(self, pose=None, pos=None, lookat=None):
         """
