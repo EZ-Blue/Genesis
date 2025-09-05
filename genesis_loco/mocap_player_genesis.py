@@ -26,13 +26,13 @@ class MocapGenesisPlayer:
         self.joint_mapping = {
             # Spine/torso - map to lumbar joints (without Skeleton: prefix!)
             ("Ab", "x"): "lumbar_extension",      # Forward/back bend
-            ("Chest", "y"): "lumbar_bending",     # Left/right bend
-            ("Neck", "z"): "lumbar_rotation",     # Rotation/twist
-            
+            ("Ab", "y"): "lumbar_bending",     # Left/right bend
+            ("Ab", "z"): "lumbar_rotation",     # Rotation/twist
+
             # Right leg - complete leg chain (without Skeleton: prefix!)
             ("RThigh", "x"): "hip_flexion_r",     # Hip flex/extend (primary walking motion)
-            ("RThigh", "z"): "hip_adduction_r",   # Hip abduct/adduct (side-to-side)
-            ("RThigh", "y"): "hip_rotation_r",    # Hip internal/external rotation
+            ("RThigh", "y"): "hip_adduction_r",   # Hip abduct/adduct (side-to-side)
+            ("RThigh", "z"): "hip_rotation_r",    # Hip internal/external rotation
             ("RShin", "x"): "knee_angle_r",       # Knee flex/extend (X-axis has largest value: 5.30°)
             ("RFoot", "x"): "ankle_angle_r",      # Ankle dorsi/plantar flex
             ("RFoot", "y"): "subtalar_angle_r",   # Ankle inversion/eversion
@@ -40,8 +40,8 @@ class MocapGenesisPlayer:
             
             # Left leg - mirror right leg (without Skeleton: prefix!)
             ("LThigh", "x"): "hip_flexion_l",     # Hip flex/extend
-            ("LThigh", "z"): "hip_adduction_l",   # Hip abduct/adduct
-            ("LThigh", "y"): "hip_rotation_l",    # Hip internal/external rotation
+            ("LThigh", "y"): "hip_adduction_l",   # Hip abduct/adduct
+            ("LThigh", "z"): "hip_rotation_l",    # Hip internal/external rotation
             ("LShin", "y"): "knee_angle_l",       # Knee flex/extend (Y-axis has largest value: 10.63°)
             ("LFoot", "x"): "ankle_angle_l",      # Ankle dorsi/plantar flex
             ("LFoot", "y"): "subtalar_angle_l",   # Ankle inversion/eversion
@@ -53,17 +53,17 @@ class MocapGenesisPlayer:
             ("RShoulder", "y"): "arm_rot_r",      # Shoulder internal/external rotation
             ("RUArm", "x"): "elbow_flex_r",       # Elbow flex/extend
             ("RFArm", "y"): "pro_sup_r",          # Forearm pronation/supination
-            ("RHand", "-z"): "wrist_flex_r",       # Wrist flex/extend (Z-axis to point -Z)
-            ("RHand", "-y"): "wrist_dev_r",        # Wrist radial/ulnar deviation
-            
+            ("RHand", "z"): "wrist_flex_r",       # Wrist flex/extend
+            ("RHand", "x"): "wrist_dev_r",        # Wrist radial/ulnar deviation
+
             # Left arm - mirror right arm (without Skeleton: prefix!)
             ("LShoulder", "x"): "arm_flex_l",     # Shoulder flex/extend
             ("LShoulder", "z"): "arm_add_l",      # Shoulder abduct/adduct
             ("LShoulder", "y"): "arm_rot_l",      # Shoulder internal/external rotation
             ("LUArm", "x"): "elbow_flex_l",       # Elbow flex/extend
             ("LFArm", "y"): "pro_sup_l",          # Forearm pronation/supination
-            ("LHand", "-z"): "wrist_flex_l",       # Wrist flex/extend (Z-axis to point -Z)
-            ("LHand", "-z"): "wrist_dev_l",        # Wrist radial/ulnar deviation
+            ("LHand", "z"): "wrist_flex_l",       # Wrist flex/extend
+            ("LHand", "x"): "wrist_dev_l",        # Wrist radial/ulnar deviation
         }
         
     def load_mocap_data(self):
@@ -155,7 +155,7 @@ class MocapGenesisPlayer:
             # Wrist/hand rotations - invert Z-axis to point hands in -Z direction
             "RHand": {"z": -1.0, "y": -1.0},  # Wrist rotations (Z-axis for -Z pointing)
             "LHand": {"z": -1.0, "y": -1.0},  # Wrist rotations (Z-axis for -Z pointing)
-            
+
             # Arms - may need inversion for natural positioning
             "RUArm": {"z": -1.0},  # Arm rotation
             "LUArm": {"z": -1.0},  # Arm rotation
@@ -281,6 +281,40 @@ class MocapGenesisPlayer:
                         print(f"🔧 Setting {joint_name} (DOF {joint_idx}) = {angle:.3f} rad ({angle*180/3.14159:.1f}°)")
             except Exception as e:
                 print(f"Warning: Could not set joint {joint_name}: {e}")
+        
+        # Dynamic knee calculation with enhanced debugging
+        # Get current hip flexion angles (in radians) 
+        hip_flexion_r = joint_angles.get('hip_flexion_r', 0.0)
+        hip_flexion_l = joint_angles.get('hip_flexion_l', 0.0)
+        
+        # Get mocap knee angles that were applied earlier
+        mocap_knee_r = joint_angles.get('knee_angle_r', 0.0)
+        mocap_knee_l = joint_angles.get('knee_angle_l', 0.0)
+        
+        # Calculate dynamic knee angles based on hip flexion
+        # More hip flexion (sitting) = more knee bend (more negative)
+        # Less hip flexion (standing) = less knee bend (closer to 0)
+        knee_r_dynamic = max(-1.5, min(-0.2, -abs(hip_flexion_r) - 0.5))
+        knee_l_dynamic = max(-1.5, min(-0.2, -abs(hip_flexion_l) - 0.5))
+        
+        # Debug: Compare mocap vs dynamic values
+        print(f"🦵 Knee Analysis:")
+        print(f"   Hip flexion: R={hip_flexion_r:.3f} ({hip_flexion_r*180/3.14159:.1f}°), L={hip_flexion_l:.3f} ({hip_flexion_l*180/3.14159:.1f}°)")
+        print(f"   Mocap knees: R={mocap_knee_r:.3f} ({mocap_knee_r*180/3.14159:.1f}°), L={mocap_knee_l:.3f} ({mocap_knee_l*180/3.14159:.1f}°)")
+        print(f"   Dynamic knees: R={knee_r_dynamic:.3f} ({knee_r_dynamic*180/3.14159:.1f}°), L={knee_l_dynamic:.3f} ({knee_l_dynamic*180/3.14159:.1f}°)")
+        
+        # Check what values are currently in qpos for knees
+        current_knee_r = qpos[16] if len(qpos) > 16 else 0.0
+        current_knee_l = qpos[17] if len(qpos) > 17 else 0.0
+        print(f"   Current qpos[16]={current_knee_r:.3f} ({current_knee_r*180/3.14159:.1f}°), qpos[17]={current_knee_l:.3f} ({current_knee_l*180/3.14159:.1f}°)")
+        
+        # Apply dynamic knee calculation (temporarily to debug)
+        qpos[16] = knee_r_dynamic  # Right knee 
+        qpos[17] = knee_l_dynamic  # Left knee
+        
+        print(f"   Applied dynamic: qpos[16]={knee_r_dynamic:.3f}, qpos[17]={knee_l_dynamic:.3f}")
+        print(f"   DOF 16 & 17 should be knee_angle_r & knee_angle_l")
+        print()
                 
         return qpos
     
@@ -457,11 +491,232 @@ class MocapGenesisPlayer:
             print("Viewer closed by user")
 
 
+def find_mocap_files(base_dir, file_types=['json', 'bvh', 'csv']):
+    """Find all mocap files recursively in the base directory"""
+    import os
+    import glob
+    from datetime import datetime
+    
+    files = []
+    
+    # Search patterns for different file types
+    patterns = {
+        'json': '**/*_processed.json',
+        'bvh': '**/*.bvh', 
+        'csv': '**/*.csv'
+    }
+    
+    for file_type in file_types:
+        if file_type in patterns:
+            pattern = os.path.join(base_dir, patterns[file_type])
+            matches = glob.glob(pattern, recursive=True)
+            
+            for match in matches:
+                try:
+                    stat = os.stat(match)
+                    files.append({
+                        'path': match,
+                        'name': os.path.basename(match),
+                        'type': file_type.upper(),
+                        'size': stat.st_size,
+                        'modified': datetime.fromtimestamp(stat.st_mtime)
+                    })
+                except OSError:
+                    continue
+    
+    # Sort by modification time (newest first)
+    files.sort(key=lambda x: x['modified'], reverse=True)
+    return files
+
+def format_file_size(bytes):
+    """Convert bytes to human readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes < 1024.0:
+            return f"{bytes:.1f}{unit}"
+        bytes /= 1024.0
+    return f"{bytes:.1f}TB"
+
+def filter_files_interactive(files):
+    """Interactive filtering and search of files"""
+    print("\nFile filtering options:")
+    print("1. Show all files")
+    print("2. JSON files only")  
+    print("3. BVH files only")
+    print("4. CSV files only")
+    print("5. Search by name")
+    
+    try:
+        filter_choice = input("\nSelect filter (1-5, default=1): ").strip()
+        if not filter_choice:
+            filter_choice = "1"
+            
+        if filter_choice == "1":
+            return files
+        elif filter_choice == "2":
+            return [f for f in files if f['type'] == 'JSON']
+        elif filter_choice == "3":
+            return [f for f in files if f['type'] == 'BVH']
+        elif filter_choice == "4":
+            return [f for f in files if f['type'] == 'CSV']
+        elif filter_choice == "5":
+            search_term = input("Enter search term: ").strip().lower()
+            if search_term:
+                return [f for f in files if search_term in f['name'].lower()]
+            else:
+                return files
+        else:
+            print("Invalid choice, showing all files.")
+            return files
+            
+    except (ValueError, KeyboardInterrupt):
+        return files
+
+def display_files_with_details(files, start_idx=0, page_size=20):
+    """Display files with detailed information in pages"""
+    if not files:
+        print("No files found!")
+        return 0, False
+        
+    end_idx = min(start_idx + page_size, len(files))
+    
+    print(f"\nShowing files {start_idx + 1}-{end_idx} of {len(files)}:")
+    print("-" * 80)
+    print(f"{'#':<3} {'Type':<4} {'Size':<8} {'Modified':<19} {'Name'}")
+    print("-" * 80)
+    
+    for i in range(start_idx, end_idx):
+        file_info = files[i]
+        print(f"{i+1:<3} {file_info['type']:<4} {format_file_size(file_info['size']):<8} "
+              f"{file_info['modified'].strftime('%Y-%m-%d %H:%M'):<19} {file_info['name']}")
+    
+    has_more = end_idx < len(files)
+    return end_idx, has_more
+
+def select_file_interactive(files):
+    """Enhanced interactive file selection with pagination and search"""
+    if not files:
+        print("No files available!")
+        return None
+        
+    # Apply filters if desired
+    filtered_files = filter_files_interactive(files)
+    
+    if not filtered_files:
+        print("No files match the filter criteria!")
+        return None
+    
+    # Pagination for large file lists
+    page_size = 20
+    current_idx = 0
+    
+    while True:
+        end_idx, has_more = display_files_with_details(filtered_files, current_idx, page_size)
+        
+        print("\nOptions:")
+        print("- Enter file number to select")
+        if has_more:
+            print("- 'n' for next page")
+        if current_idx > 0:
+            print("- 'p' for previous page")
+        print("- 'q' to quit")
+        print("- 'r' to refresh/re-filter")
+        
+        try:
+            choice = input(f"\nYour choice: ").strip().lower()
+            
+            if choice == 'q':
+                return None
+            elif choice == 'n' and has_more:
+                current_idx = end_idx
+            elif choice == 'p' and current_idx > 0:
+                current_idx = max(0, current_idx - page_size)
+            elif choice == 'r':
+                filtered_files = filter_files_interactive(files)
+                current_idx = 0
+            else:
+                # Try to parse as file number
+                file_num = int(choice) - 1
+                if 0 <= file_num < len(filtered_files):
+                    selected = filtered_files[file_num]
+                    print(f"Selected: {selected['name']}")
+                    return selected['path']
+                else:
+                    print(f"Invalid selection. Please enter 1-{len(filtered_files)}")
+                    
+        except (ValueError, KeyboardInterrupt):
+            print("Invalid input or cancelled.")
+            continue
+
 def main():
-    """Main function"""
+    """Main function with enhanced command line argument support"""
+    import argparse
+    import os
+    
+    # Set up argument parsing
+    parser = argparse.ArgumentParser(description='Play mocap animation with Genesis skeleton')
+    parser.add_argument('--json_path', type=str, help='Path to specific JSON mocap file')
+    parser.add_argument('--list_files', action='store_true', help='List available mocap files with details')
+    parser.add_argument('--interactive', action='store_true', help='Interactively browse and select from available files')
+    parser.add_argument('--filter', choices=['json', 'bvh', 'csv'], help='Filter files by type when listing')
+    parser.add_argument('--search', type=str, help='Search for files containing this term')
+    
+    args = parser.parse_args()
+    
     # File paths
     skeleton_xml = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
-    mocap_json = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/mocapdata/drive-download-20250829T005222Z-1-001/Take 2025-08-19 02.54.57 PM_processed.json"
+    mocap_base_dir = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/mocapdata/"
+    
+    # Find all mocap files
+    print("Scanning for mocap files...")
+    all_files = find_mocap_files(mocap_base_dir)
+    
+    if not all_files:
+        print("No mocap files found in the directory!")
+        return
+    
+    # Handle list files option
+    if args.list_files:
+        filtered_files = all_files
+        
+        # Apply command line filters
+        if args.filter:
+            filtered_files = [f for f in filtered_files if f['type'].lower() == args.filter]
+            
+        if args.search:
+            search_term = args.search.lower()
+            filtered_files = [f for f in filtered_files if search_term in f['name'].lower()]
+        
+        if filtered_files:
+            display_files_with_details(filtered_files)
+        else:
+            print("No files match the specified criteria.")
+        return
+    
+    # Handle interactive selection
+    if args.interactive:
+        mocap_json = select_file_interactive(all_files)
+        if not mocap_json:
+            print("No file selected. Exiting.")
+            return
+    
+    # Handle direct path argument
+    elif args.json_path:
+        mocap_json = args.json_path
+        if not os.path.exists(mocap_json):
+            print(f"Error: JSON file not found: {mocap_json}")
+            return
+    
+    # Default file selection - use most recent JSON file
+    else:
+        json_files = [f for f in all_files if f['type'] == 'JSON']
+        if json_files:
+            mocap_json = json_files[0]['path']  # Most recent JSON file
+            print(f"Using most recent JSON file: {os.path.basename(mocap_json)}")
+        else:
+            print("No processed JSON files found! Please convert some mocap data first.")
+            print("Available files:")
+            display_files_with_details(all_files[:10])  # Show first 10 files
+            return
     
     # Check if files exist
     if not Path(skeleton_xml).exists():
@@ -487,12 +742,12 @@ def main():
         print("2. Auto-play animation with loop")
         print("3. Interactive viewer (static pose)")
         
-        choice = "1"  # Default to auto-play for testing
+        choice = "2"  # Default to auto-play for testing
         
         if choice == "1":
             # Auto-play the animation once
             print("Starting auto-play...")
-            player.play_mocap(frame_rate=30, start_frame=100, end_frame=700, loop=False)  # Skip first 100 frames
+            player.play_mocap(frame_rate=30, start_frame=100, end_frame=None, loop=False)  # Skip first 100 frames
             
             # Keep viewer open after playback
             input("Press Enter to close viewer...")
@@ -500,7 +755,7 @@ def main():
         elif choice == "2":
             # Auto-play with loop
             print("Starting looped playback...")
-            player.play_mocap(frame_rate=30, start_frame=0, end_frame=400, loop=True)  # ~3 seconds looped
+            player.play_mocap(frame_rate=30, start_frame=0, end_frame=None, loop=True)  # ~3 seconds looped
             
         elif choice == "3":
             # Interactive mode
