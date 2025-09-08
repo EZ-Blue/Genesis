@@ -5,14 +5,16 @@ This directory contains the essential files for motion capture integration with 
 ## Files
 
 - `mocap_player_genesis.py` - Main player for Genesis mocap animation with full joint mapping and coordinate fixes
-- `mocap_converter_fixed.py` - Converter from CSV mocap data to JSON format with proper joint processing
-- `csv/` - Sample LOCAL mocap data processed and ready for playback
+- `mocap_converter.py` - Converter from CSV mocap data to JSON format with proper joint processing
+- `mocap_data/` - Sample LOCAL mocap data:
+  - `Take 2025-08-19 03.01.18 PM_LOCAL.csv` - Original raw mocap CSV export
+  - `Take 2025-08-19 03.01.18 PM_LOCAL_processed.json` - Processed JSON ready for playback
 
 ## Usage
 
 ### Convert mocap CSV to JSON:
 ```bash
-python3 mocap_converter_fixed.py
+python3 mocap_converter.py
 ```
 
 ### Play mocap animation:

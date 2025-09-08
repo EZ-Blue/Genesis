@@ -446,7 +446,7 @@ def main():
     skeleton_xml = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/skeleton/genesis_skeleton_torque_box_feet.xml"
     
     # Find all available JSON files
-    json_pattern = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/csv/*_processed.json"
+    json_pattern = "mocap_data/*_processed.json"
     available_files = glob.glob(json_pattern)
     available_files.sort()
     
