@@ -6,7 +6,6 @@ This directory contains the essential files for motion capture integration with 
 
 - `mocap_player_genesis.py` - Main player for Genesis mocap animation with full joint mapping and coordinate fixes
 - `mocap_converter_fixed.py` - Converter from CSV mocap data to JSON format with proper joint processing
-- `skeleton/` - Genesis skeleton XML files for humanoid model
 - `csv/` - Sample LOCAL mocap data processed and ready for playback
 
 ## Usage
