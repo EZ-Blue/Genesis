@@ -73,7 +73,10 @@ class MocapGenesisPlayer:
             self.mocap_data = json.load(f)
         
         frames = self.mocap_data['frames']
-        print(f"Loaded {len(frames)} frames ({frames[-1]['time']:.2f}s)")
+        if frames:
+            print(f"Loaded {len(frames)} frames ({frames[-1]['time']:.2f}s)")
+        else:
+            print("Loaded 0 frames (empty dataset)")
         return True
         
     def setup_genesis(self):
