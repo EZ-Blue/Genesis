@@ -370,184 +370,10 @@ class MocapConverter:
                 print()
 
 
-def find_csv_files(base_dir):
-    """Find all CSV files recursively in the base directory"""
-    import os
-    import glob
-    from datetime import datetime
-    
-    files = []
-    pattern = os.path.join(base_dir, '**/*.csv')
-    matches = glob.glob(pattern, recursive=True)
-    
-    for match in matches:
-        try:
-            stat = os.stat(match)
-            files.append({
-                'path': match,
-                'name': os.path.basename(match),
-                'size': stat.st_size,
-                'modified': datetime.fromtimestamp(stat.st_mtime)
-            })
-        except OSError:
-            continue
-    
-    # Sort by modification time (newest first)
-    files.sort(key=lambda x: x['modified'], reverse=True)
-    return files
-
-def format_file_size(bytes):
-    """Convert bytes to human readable format"""
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if bytes < 1024.0:
-            return f"{bytes:.1f}{unit}"
-        bytes /= 1024.0
-    return f"{bytes:.1f}TB"
-
-def display_csv_files(files, start_idx=0, page_size=20):
-    """Display CSV files with details"""
-    if not files:
-        print("No CSV files found!")
-        return 0, False
-        
-    end_idx = min(start_idx + page_size, len(files))
-    
-    print(f"\nShowing files {start_idx + 1}-{end_idx} of {len(files)}:")
-    print("-" * 80)
-    print(f"{'#':<3} {'Size':<8} {'Modified':<19} {'Name'}")
-    print("-" * 80)
-    
-    for i in range(start_idx, end_idx):
-        file_info = files[i]
-        print(f"{i+1:<3} {format_file_size(file_info['size']):<8} "
-              f"{file_info['modified'].strftime('%Y-%m-%d %H:%M'):<19} {file_info['name']}")
-    
-    has_more = end_idx < len(files)
-    return end_idx, has_more
-
-def select_csv_interactive(files):
-    """Interactive CSV file selection with pagination"""
-    if not files:
-        print("No CSV files available!")
-        return None
-    
-    # Search functionality
-    print("\nOptions:")
-    print("1. Show all files")
-    print("2. Search by name")
-    
-    try:
-        choice = input("\nSelect option (1-2, default=1): ").strip()
-        if choice == "2":
-            search_term = input("Enter search term: ").strip().lower()
-            if search_term:
-                files = [f for f in files if search_term in f['name'].lower()]
-                if not files:
-                    print("No files match the search term!")
-                    return None
-    except (ValueError, KeyboardInterrupt):
-        pass
-    
-    # Pagination for large file lists
-    page_size = 20
-    current_idx = 0
-    
-    while True:
-        end_idx, has_more = display_csv_files(files, current_idx, page_size)
-        
-        print("\nOptions:")
-        print("- Enter file number to select")
-        if has_more:
-            print("- 'n' for next page")
-        if current_idx > 0:
-            print("- 'p' for previous page")
-        print("- 'q' to quit")
-        
-        try:
-            choice = input(f"\nYour choice: ").strip().lower()
-            
-            if choice == 'q':
-                return None
-            elif choice == 'n' and has_more:
-                current_idx = end_idx
-            elif choice == 'p' and current_idx > 0:
-                current_idx = max(0, current_idx - page_size)
-            else:
-                # Try to parse as file number
-                file_num = int(choice) - 1
-                if 0 <= file_num < len(files):
-                    selected = files[file_num]
-                    print(f"Selected: {selected['name']}")
-                    return selected['path']
-                else:
-                    print(f"Invalid selection. Please enter 1-{len(files)}")
-                    
-        except (ValueError, KeyboardInterrupt):
-            print("Invalid input or cancelled.")
-            continue
-
 def main():
-    """Main function with enhanced command line argument support"""
-    import argparse
-    import os
-    
-    # Set up argument parsing
-    parser = argparse.ArgumentParser(description='Convert mocap CSV to processed JSON format')
-    parser.add_argument('--csv_path', type=str, help='Path to specific CSV file to convert')
-    parser.add_argument('--list_files', action='store_true', help='List available CSV files')
-    parser.add_argument('--interactive', action='store_true', help='Interactively select from available CSV files')
-    parser.add_argument('--search', type=str, help='Search for CSV files containing this term')
-    
-    args = parser.parse_args()
-    
-    # Base directory for mocap data
-    mocap_base_dir = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/mocapdata/"
-    
-    # Find all CSV files
-    print("Scanning for CSV files...")
-    csv_files = find_csv_files(mocap_base_dir)
-    
-    if not csv_files:
-        print("No CSV files found in the directory!")
-        return
-    
-    # Handle list files option
-    if args.list_files:
-        filtered_files = csv_files
-        
-        # Apply search filter if provided
-        if args.search:
-            search_term = args.search.lower()
-            filtered_files = [f for f in filtered_files if search_term in f['name'].lower()]
-        
-        if filtered_files:
-            display_csv_files(filtered_files)
-        else:
-            print("No files match the specified criteria.")
-        return
-    
-    # Handle interactive selection
-    if args.interactive:
-        csv_file = select_csv_interactive(csv_files)
-        if not csv_file:
-            print("No file selected. Exiting.")
-            return
-    
-    # Handle direct path argument
-    elif args.csv_path:
-        csv_file = args.csv_path
-        if not os.path.exists(csv_file):
-            print(f"Error: CSV file not found: {csv_file}")
-            return
-    
-    # Default file selection - use most recent CSV file
-    else:
-        if csv_files:
-            csv_file = csv_files[0]['path']  # Most recent CSV file
-            print(f"Using most recent CSV file: {os.path.basename(csv_file)}")
-        else:
-            print("No CSV files found!")
-            return
+    """Main function to demonstrate usage"""
+    # Get CSV file path
+    csv_file = "/home/choonspin/intuitive_autonomy/integration/Genesis/genesis_loco/mocapdata/drive-download-20250829T005222Z-1-001/Take 2025-08-19 02.54.57 PM.csv"
     
     try:
         # Create converter instance
@@ -561,10 +387,8 @@ def main():
         # Print summary
         converter.print_summary()
         
-        # Generate output filename from input filename (same base name)
-        output_file = csv_file.replace('.csv', '_processed.json')
-        
         # Save processed data
+        output_file = csv_file.replace('.csv', '_processed.json')
         converter.save_processed_data(output_file)
         
         print(f"\nConversion complete! Check {output_file} for the processed data.")
